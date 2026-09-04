@@ -1,14 +1,14 @@
 class_name EcsPackedStore
 extends EcsComponentStore
 
-## Декларативное хранилище компонентов: вы объявляете поля данных, а базовый
-## класс пишет всю обвязку.
+## A declarative component store: you declare the data fields, and the base class
+## writes all the wiring.
 ##
-## [EcsComponentStore] требует руками писать [method _reserve_dense] и
-## [method _relocate_dense] для каждого хранилища, и забытый второй метод тихо
-## портит данные при каждом удалении. Этот наследник убирает целый класс
-## ошибок: назовите свои поля один раз, и всё выделение памяти, рост ёмкости и
-## перенос при swap-remove будут сделаны за вас.
+## [EcsComponentStore] requires you to hand-write [method _reserve_dense] and
+## [method _relocate_dense] for every store, and a forgotten second method
+## silently corrupts data on every removal. This subclass removes a whole class
+## of bugs: name your fields once, and all memory allocation, capacity growth and
+## swap-remove relocation are done for you.
 ##
 ## [codeblock]
 ## class_name PositionStore
@@ -22,36 +22,35 @@ extends EcsComponentStore
 ##     track(&"x", &"y", &"tint")
 ## [/codeblock]
 ##
-## [b]В горячем цикле это ничего не стоит.[/b] Поля остаются обычными
-## типизированными членами класса, поэтому система читает их напрямую и на
-## полной скорости:
+## [b]In the hot loop this costs nothing.[/b] The fields stay ordinary typed
+## class members, so a system reads them directly and at full speed:
 ## [codeblock]
 ## var px: PackedFloat32Array = positions.x
 ## for dense in positions.count:
 ##     px[dense] += 1.0
 ## [/codeblock]
-## Обобщённая работа происходит только при выделении памяти и удалении, и даже
-## там базовый класс разрешает каждое поле один раз на всю операцию, а затем
-## идёт по перемещениям — это измеримо быстрее, чем виртуальный вызов на каждое
-## перемещение, который платит рукописное хранилище.
+## The generic work happens only during allocation and removal, and even there
+## the base class resolves each field once for the whole operation and then walks
+## the moves — measurably faster than the virtual call per move that a
+## hand-written store pays.
 ##
-## [b]Поддерживаемые типы полей[/b]: любой `Packed*Array`, а также обычный
-## `Array` для данных с объектами или ресурсами. Поле-`Array`, ВЛАДЕЮЩЕЕ тем, на
-## что ссылается, должно дополнительно определить [code]_release_dense()[/code]
-## (см. [EcsComponentStore]).
+## [b]Supported field types[/b]: any `Packed*Array`, and also a plain `Array` for
+## data with objects or resources. An `Array` field that OWNS what it references
+## must additionally define [code]_release_dense()[/code] (see
+## [EcsComponentStore]).
 ##
-## [b]Если вы когда-нибудь присвоите отслеживаемому полю новый массив целиком[/b]
-## (`x = PackedFloat32Array()`), а не измените его на месте — вызовите после
-## этого [method refresh_tracked_arrays], чтобы закешированные ссылки указывали
-## на новые массивы.
+## [b]If you ever assign a whole new array to a tracked field[/b]
+## (`x = PackedFloat32Array()`) rather than modifying it in place — call
+## [method refresh_tracked_arrays] afterwards so the cached references point at
+## the new arrays.
 
 var _tracked_names: Array[StringName] = []
 var _tracked_arrays: Array = []
 var _tracked_zeros: Array = []
 
 
-## Регистрирует поля данных по именам. Вызывается один раз из `_init()`.
-## Принимает сколько угодно имён, поэтому хранилищу обычно хватает одной строки.
+## Registers the data fields by name. Call it once from `_init()`. It accepts any
+## number of names, so a store usually needs a single line.
 func track(
 	first: StringName,
 	second: StringName = &"",
@@ -67,19 +66,19 @@ func track(
 			track_field(name)
 
 
-## Регистрирует одно поле данных. Пригодится, когда полей больше, чем принимает
-## [method track], или когда имена вычисляются.
+## Registers one data field. Useful when there are more fields than [method track]
+## accepts, or when the names are computed.
 func track_field(field_name: StringName) -> void:
 	if _tracked_names.has(field_name):
-		push_error("EcsPackedStore: поле «%s» зарегистрировано дважды" % field_name)
+		push_error("EcsPackedStore: field '%s' is registered twice" % field_name)
 		return
 	var value: Variant = get(field_name)
 	if value == null:
-		push_error("EcsPackedStore: у этого хранилища нет поля с именем «%s»" % field_name)
+		push_error("EcsPackedStore: this store has no field named '%s'" % field_name)
 		return
 	var zero: Variant = _zero_for(typeof(value))
 	if zero == null and typeof(value) != TYPE_ARRAY:
-		push_error("EcsPackedStore: поле «%s» имеет тип %s, а это не Packed*Array и не Array"
+		push_error("EcsPackedStore: field '%s' has type %s, which is neither a Packed*Array nor an Array"
 			% [field_name, type_string(typeof(value))])
 		return
 	_tracked_names.append(field_name)
@@ -87,15 +86,15 @@ func track_field(field_name: StringName) -> void:
 	_tracked_zeros.append(zero)
 
 
-## Заново разрешает закешированные ссылки на массивы из живых полей. Нужен
-## только в редком случае, когда отслеживаемому полю присвоили новый массив
-## целиком, а не меняли его на месте.
+## Re-resolves the cached array references from the live fields. Needed only in
+## the rare case where a tracked field was assigned a whole new array rather than
+## modified in place.
 func refresh_tracked_arrays() -> void:
 	for i in _tracked_names.size():
 		_tracked_arrays[i] = get(_tracked_names[i])
 
 
-## Число зарегистрированных полей данных. Пригодится в тестах и инструментах.
+## The number of registered data fields. Useful in tests and tooling.
 func get_tracked_field_count() -> int:
 	return _tracked_names.size()
 
@@ -104,17 +103,16 @@ func get_tracked_field_name(index: int) -> StringName:
 	return _tracked_names[index]
 
 
-## Обобщённо читает одно значение данных — для отладочного интерфейса и
-## инструментов.
+## Generically reads one data value — for the debug interface and tooling.
 ##
-## Именно это позволяет инспектору вывести компонент целиком, ничего не зная о
-## хранилище: имена полей уже зарегистрированы, а здесь берутся значения.
-## Только чтение, намеренно: обобщённого сеттера нет, потому что запись в живую
-## симуляцию из отладочной панели — отдельное решение с другими правилами
-## безопасности.
+## This is what lets the inspector show a whole component while knowing nothing
+## about the store: the field names are already registered, and the values are
+## fetched here. Read-only, deliberately: there is no generic setter, because
+## writing into a live simulation from a debug panel is a separate decision with
+## different safety rules.
 ##
-## Холодный путь: идёт через контейнер с Variant-типизацией. Никогда не
-## вызывайте это из системы.
+## Cold path: it goes through a Variant-typed container. Never call it from a
+## system.
 func get_field_value(field_index: int, dense_slot: int) -> Variant:
 	if field_index < 0 or field_index >= _tracked_arrays.size():
 		return null
@@ -124,8 +122,9 @@ func get_field_value(field_index: int, dense_slot: int) -> Variant:
 	return array[dense_slot]
 
 
-## Удобство для инструментов: все отслеживаемые поля одной сущности в виде
-## `{ имя_поля: значение }`, либо пустой словарь, если компонента у сущности нет.
+## A convenience for tooling: all tracked fields of one entity as
+## `{ field_name: value }`, or an empty dictionary if the entity has no
+## component.
 func describe_entity(entity: int) -> Dictionary:
 	var result: Dictionary = {}
 	if entity < 0 or entity >= get_capacity():
@@ -139,13 +138,13 @@ func describe_entity(entity: int) -> Dictionary:
 	return result
 
 
-## Записывает нулевое значение соответствующего типа в [param dense_slot]
-## каждого отслеживаемого поля.
+## Writes the type-appropriate zero value into [param dense_slot] of every
+## tracked field.
 ##
-## Плотные слоты переиспользуются, поэтому только что присоединённый компонент
-## начинает жизнь с тем, что оставил предыдущий владелец слота. Вызывайте это
-## сразу после [method attach], если у хранилища есть необязательные поля,
-## которые путь создания заполняет не всегда.
+## Dense slots are reused, so a just-attached component starts life with whatever
+## the previous owner of the slot left behind. Call this right after
+## [method attach] if the store has optional fields that the creation path does
+## not always fill.
 func clear_slot(dense_slot: int) -> void:
 	for i in _tracked_arrays.size():
 		var array: Variant = _tracked_arrays[i]
@@ -155,16 +154,15 @@ func clear_slot(dense_slot: int) -> void:
 func _reserve_dense(dense_capacity: int) -> void:
 	refresh_tracked_arrays()
 	if _tracked_names.is_empty():
-		push_error("EcsPackedStore(тип %d): не отслеживается ни одного поля — вызовите track() в _init()" % type_id)
+		push_error("EcsPackedStore(type %d): no field is tracked — call track() in _init()" % type_id)
 	for i in _tracked_arrays.size():
 		var array: Variant = _tracked_arrays[i]
 		array.resize(dense_capacity)
 
 
-## Определён (а не унаследован), чтобы EcsComponentStore автоматически распознал
-## поддержку роста: любой EcsPackedStore переживает world.reserve_capacity().
-## resize() сохраняет живой префикс [0, count) — это ровно то, что требует
-## контракт.
+## Defined (not inherited) so that EcsComponentStore auto-detects growth support:
+## any EcsPackedStore survives world.reserve_capacity(). resize() keeps the live
+## prefix [0, count) — which is exactly what the contract requires.
 func _grow_dense(_previous_capacity: int, dense_capacity: int) -> void:
 	for i in _tracked_arrays.size():
 		var array: Variant = _tracked_arrays[i]
@@ -177,10 +175,9 @@ func _relocate_dense(from_slot: int, to_slot: int) -> void:
 		array[to_slot] = array[from_slot]
 
 
-## Пакетный перенос. Разрешить каждое поле один раз и затем пройти по
-## перемещениям — значит превратить поиск массива «на каждое перемещение» в
-## поиск «на каждое поле»; именно отсюда пакетный путь уничтожения берёт
-## большую часть своей скорости.
+## Batched relocation. Resolving each field once and then walking the moves turns
+## the array lookup from "per move" into "per field"; that is where the batched
+## destruction path gets most of its speed.
 func _relocate_dense_batch(from_slots: PackedInt32Array, to_slots: PackedInt32Array, move_count: int) -> void:
 	for i in _tracked_arrays.size():
 		var array: Variant = _tracked_arrays[i]

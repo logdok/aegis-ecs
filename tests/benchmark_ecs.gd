@@ -1,21 +1,22 @@
 extends SceneTree
 
-## Воспроизводимые микрозамеры путей, которые определяют реальный кадр.
+## Reproducible micro-benchmarks of the paths that determine a real frame.
 ##
-## Запуск из проекта, содержащего аддон:
+## Run from a project that contains the add-on:
 ##   godot --headless --script res://addons/aegis_ecs/tests/benchmark_ecs.gd
 ##
-## Цифры — лучшее из N прогонов, чтобы приглушить шум ОС, и полезны как
-## СООТНОШЕНИЯ, а не как абсолютная гарантия: на мобильном устройстве ждите в
-## несколько раз медленнее. Смысл держать это в репозитории в том, что
-## оптимизацию можно доказать, а не предположить, а регрессия проявляется числом.
+## The numbers are the best of N runs, to dampen OS noise, and are useful as
+## RATIOS rather than as an absolute guarantee: on a mobile device expect several
+## times slower. The point of keeping this in the repository is that an
+## optimization can be proven rather than assumed, and a regression shows up as a
+## number.
 
 const ENTITIES: int = 10000
 const STORES: int = 12
 const REPEATS: int = 5
 
 
-## Рукописное хранилище: классическая форма, два обязательных переопределения.
+## A hand-written store: the classic form, two mandatory overrides.
 class ManualStore extends EcsComponentStore:
 	var values: PackedFloat32Array = PackedFloat32Array()
 	var vectors: PackedVector3Array = PackedVector3Array()
@@ -33,14 +34,14 @@ class ManualStore extends EcsComponentStore:
 		vectors[to_slot] = vectors[from_slot]
 
 
-## Ничего не делает: смысл в том, чтобы измерить наблюдателя, а не системы.
+## Does nothing: the point is to measure the observer, not the systems.
 class NoopSystem extends EcsSystem:
 	func _init(display_name: String) -> void:
 		system_name = display_name
 		complete_access_metadata()
 
 
-## Те же данные в декларативной форме: ни одного переопределения.
+## The same data in declarative form: not a single override.
 class DeclarativeStore extends EcsPackedStore:
 	var values: PackedFloat32Array = PackedFloat32Array()
 	var vectors: PackedVector3Array = PackedVector3Array()
@@ -63,9 +64,9 @@ func _init() -> void:
 	quit(0)
 
 
-# --- уничтожение --------------------------------------------------------------
+# --- destruction ------------------------------------------------------------
 
-## Все хранилища одного размера, поэтому каждое обходит список жертв.
+## All stores are the same size, so each one walks the list of victims.
 func _bench_destroy_uniform() -> void:
 	print("-- destruction, %d equally sized stores --" % STORES)
 	for owned in [4, 12]:
@@ -90,9 +91,8 @@ func _bench_destroy_uniform() -> void:
 			% [ENTITIES / 1000, owned, STORES], _best(samples))
 
 
-## Реалистичная форма: несколько больших хранилищ плюс много маленьких
-## специализированных. Каждое маленькое должно стоить O(своего размера), а не
-## O(жертв).
+## A realistic shape: a few large stores plus many small specialized ones. Each
+## small one should cost O(its own size), not O(victims).
 func _bench_destroy_mixed() -> void:
 	print("\n-- destruction, mixed store sizes (2 large + 10 small) --")
 	var samples := PackedFloat64Array()
@@ -123,7 +123,7 @@ func _bench_destroy_mixed() -> void:
 	_report("flush %dk entities, 10 stores hold only 32 each" % (ENTITIES / 1000), _best(samples))
 
 
-## Рукописное против декларативного, данные одинаковые.
+## Hand-written vs declarative, the data is identical.
 func _bench_store_flavours() -> void:
 	print("\n-- hand-written EcsComponentStore vs declarative EcsPackedStore --")
 	for declarative in [false, true]:
@@ -148,7 +148,7 @@ func _bench_store_flavours() -> void:
 			% [ENTITIES / 1000, "declarative" if declarative else "hand-written"], _best(samples))
 
 
-# --- создание -----------------------------------------------------------------
+# --- creation --------------------------------------------------------------
 
 func _bench_spawn() -> void:
 	print("\n-- creation --")
@@ -179,7 +179,7 @@ func _bench_spawn() -> void:
 	_report("create_entities + attach_many, batched", _best(samples))
 
 
-# --- обход --------------------------------------------------------------------
+# --- iteration ------------------------------------------------------------
 
 func _bench_iteration() -> void:
 	print("\n-- iteration --")
@@ -231,7 +231,7 @@ func _bench_query() -> void:
 	for repeat in REPEATS:
 		var started: int = Time.get_ticks_usec()
 		for frame in 10:
-			# Заставляем перестраиваться каждый раз: реальный кадр меняет состав.
+			# Force a rebuild every time: a real frame changes the membership.
 			a.detach(a.dense_entities[a.count - 1])
 			query.refresh()
 		samples.append(float(Time.get_ticks_usec() - started))
@@ -246,7 +246,7 @@ func _bench_query() -> void:
 	_report("refresh x10, membership unchanged (cache hit)", _best(samples))
 
 
-# --- пространственная сетка ----------------------------------------------------
+# --- spatial grid ----------------------------------------------------------
 
 func _bench_grid() -> void:
 	print("\n-- UniformSpatialGrid --")
@@ -284,11 +284,11 @@ func _bench_grid() -> void:
 		_report("query_nearest x512, %s" % label, _best(samples))
 
 
-# --- стоимость наблюдения ------------------------------------------------------
+# --- observer cost -------------------------------------------------------
 
-## Во что обходится наблюдение. Запись идёт каждый кадр, поэтому обязана быть
-## пренебрежимой; анализ — несколько раз в секунду, поэтому ему достаточно быть
-## просто небольшим. И то и другое здесь измеряется, а не предполагается.
+## What observing costs. Recording runs every frame, so it must be negligible;
+## analysis runs a few times a second, so it only has to be small. Both are
+## measured here, not assumed.
 func _bench_observer() -> void:
 	print("\n-- inspector overhead (20 systems) --")
 	var world := EcsWorld.new(1024)
@@ -342,7 +342,7 @@ func _bench_observer() -> void:
 		recorder.get_memory_usage() / 1024.0])
 
 
-# --- вспомогательное ----------------------------------------------------------
+# --- helpers ------------------------------------------------------------
 
 func _best(samples: PackedFloat64Array) -> float:
 	var best: float = samples[0]

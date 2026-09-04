@@ -1,16 +1,16 @@
 class_name EcsDiagnostics
 extends RefCounted
 
-## Читает числа за вас.
+## Reads the numbers for you.
 ##
-## Каждое правило здесь соответствует задокументированному, реальному сбою,
-## который сам по себе не выдаёт никакого сообщения об ошибке: запрос, чей кэш
-## не влучает никогда; очередь уничтожения, которая не спорожняется, потому что
-## жнец стоит не там; пространственная сетка, размер ячейки которой превращает
-## перестройку в основном в прогулку по пустоте. Каждое очевидно, когда знаешь,
-## куда смотреть, и ни одно не очевидно, пока смотришь на стену микросекунд.
+## Every rule here corresponds to a documented, real failure that on its own
+## produces no error message: a query whose cache never hits; a destroy queue
+## that is not being drained because the reaper is misplaced; a spatial grid
+## whose cell size turns the rebuild mostly into a walk over emptiness. Each is
+## obvious once you know where to look, and none is obvious while you stare at a
+## wall of microseconds.
 ##
-## Находка несёт важность, то, что было измерено, и что с этим делать.
+## A finding carries a severity, what was measured and what to do about it.
 ##
 ## [codeblock]
 ## var diagnostics := EcsDiagnostics.new()
@@ -18,12 +18,12 @@ extends RefCounted
 ##     print(finding.format())
 ## [/codeblock]
 ##
-## Правила, которым нужны объекты, не принадлежащие миру — запросы, сетки,
-## часы, — получают их через [param extras]; библиотека намеренно не держит их
-## реестра.
+## Rules that need objects the world does not own — queries, grids, clocks — get
+## them through [param extras]; the library deliberately keeps no registry of
+## them.
 
 
-## Одна находка.
+## A single finding.
 class Finding extends RefCounted:
 	enum Severity { INFO = 0, WARNING = 1, CRITICAL = 2 }
 
@@ -58,38 +58,38 @@ class Finding extends RefCounted:
 		return text
 
 
-## Бюджет кадра, с которым сравнивается p95. 16600 мкс — это 60 Гц.
+## The frame budget that p95 is compared against. 16600 us is 60 Hz.
 var frame_budget_usec: float = 16600.0
 
-## Система, занимающая больше этой доли кадра, называется вслух — не как
-## неисправность, а чтобы доминирующая стоимость никогда не была сюрпризом.
+## A system taking more than this fraction of the frame is called out — not as a
+## fault, but so a dominant cost is never a surprise.
 var dominant_share_percent: float = 40.0
 
-## Отношение max/median, выше которого система считается источником рывков.
+## The max/median ratio above which a system is treated as a spike source.
 var volatility_warning: float = 5.0
 
-## Минимальная доля избытка в медленных кадрах, начиная с которой о нестабильной
-## системе сообщается.
+## The minimum share of the slow-frame excess at which an unstable system is
+## reported.
 var excess_share_warning: float = 15.0
 
-## Заполненность мира, при которой выдаётся предупреждение о ёмкости.
+## The world fill factor at which a capacity warning is issued.
 var load_factor_warning: float = 0.85
 
-## Заполненность хранилища, при которой выдаётся предупреждение.
+## The store fill factor at which a warning is issued.
 var store_fill_warning: float = 0.90
 
-## Отношение худшего кадра к медианному, выше которого о рывках сообщается.
+## The ratio of the worst frame to the median above which spikes are reported.
 var spike_ratio_warning: float = 2.0
 
-# Темп перестроек запроса — это дельта между вызовами, поэтому предыдущее
-# показание хранится здесь.
+# A query's rebuild rate is a delta between calls, so the previous reading is
+# kept here.
 var _query_rebuilds: Dictionary = {}
 var _query_frames: Dictionary = {}
 
 
-## Выполняет все правила и возвращает находки, худшие первыми.
+## Runs every rule and returns the findings, worst first.
 ##
-## [param extras] может содержать:
+## [param extras] may contain:
 ## [codeblock]
 ## {
 ##     "clock":   SimulationClock,
@@ -118,8 +118,7 @@ func inspect(recorder: EcsFrameRecorder, stats: EcsFrameStats, world: EcsWorld,
 	return findings
 
 
-## Очищает запомненные счётчики перестроек запросов. Вызывайте после перезапуска
-## уровня.
+## Clears the remembered query rebuild counters. Call it after a level restart.
 func reset() -> void:
 	_query_rebuilds.clear()
 	_query_frames.clear()
@@ -248,8 +247,8 @@ func _check_grids(findings: Array, grids: Dictionary) -> void:
 		var entries: int = grid.get_entry_count()
 		if cells <= 0:
 			continue
-		# Цена перестройки — O(записи + ячейки): сетка, у которой ячеек намного больше,
-		# чем объектов, тратит большую часть перестройки на обход пустоты.
+		# The rebuild cost is O(entries + cells): a grid with far more cells than
+		# objects spends most of the rebuild walking over emptiness.
 		if entries > 0 and cells > entries * 8:
 			findings.append(Finding.new(Finding.Severity.WARNING, "Grid",
 				"'%s' has far more cells than objects" % name,

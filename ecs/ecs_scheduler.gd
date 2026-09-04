@@ -1,30 +1,31 @@
 class_name EcsScheduler
 extends RefCounted
 
-## Упорядоченный детерминированный конвейер систем со встроенным
-## профилированием каждой отдельной системы.
+## An ordered, deterministic pipeline of systems with built-in per-system
+## profiling.
 ##
-## Планировщик держит ВСЁ «что за чем выполняется» в одном месте. Список систем
-## задаётся один раз при сборке мира и больше не меняется; планировщик просто
-## идёт по нему в том же порядке каждый кадр.
+## The scheduler keeps ALL of "what runs after what" in one place. The system
+## list is defined once while building the world and never changes again; the
+## scheduler simply walks it in the same order every frame.
 ##
-## [b]Порядок систем — это поведение, а не оформление кода.[/b] Перестановка
-## двух строк регистрации меняет то, что происходит в игре: если система Б
-## читает данные, которые система А пишет в этом же кадре, А обязана идти
-## раньше. Относитесь к списку регистрации как к спецификации.
+## [b]System order is behaviour, not code formatting.[/b] Swapping two
+## registration lines changes what happens in the game: if system B reads data
+## that system A writes in the same frame, A must come first. Treat the
+## registration list as a specification.
 ##
-## [b]Профилирование[/b] — основной инструмент диагностики производительности
-## прямо на устройстве: [method get_timing_usec] отдаёт время каждой системы в
-## микросекундах за последний кадр, а [method get_average_timing_usec] —
-## сглаженное значение, которое намного легче читать на живом HUD. Микросекунды,
-## а не миллисекунды, выбраны намеренно: дешёвые системы укладываются в единицы
-## микросекунд, и миллисекундный отчёт состоял бы из нулей.
+## [b]Profiling[/b] is the main performance-diagnostics tool, right on the
+## device: [method get_timing_usec] gives each system's time in microseconds for
+## the last frame, and [method get_average_timing_usec] a smoothed value that is
+## much easier to read on a live HUD. Microseconds, not milliseconds, are a
+## deliberate choice: cheap systems fit into single-digit microseconds, and a
+## millisecond report would be all zeros.
 ##
-## Само измерение стоит два вызова [method Time.get_ticks_usec] на систему за
-## кадр. Это немного, но если нужно выжать последнее — выключите
-## [member profiling_enabled], и цикл пойдёт вообще без замеров.
+## The measurement itself costs two [method Time.get_ticks_usec] calls per system
+## per frame. That is little, but if you need to squeeze out the last bit —
+## disable [member profiling_enabled] and the loop runs with no measurement at
+## all.
 
-## Вес самого свежего замера в сглаженном времени. Меньше — стабильнее.
+## The weight of the newest sample in the smoothed time. Lower is steadier.
 const AVERAGE_SMOOTHING: float = 0.1
 
 var profiling_enabled: bool = true
@@ -39,14 +40,14 @@ var _world: EcsWorld
 var _context
 
 
-## Регистрирует [param system] в конвейере и возвращает её же — порядок вызовов
-## add_system() определяет порядок исполнения.
+## Registers [param system] in the pipeline and returns it — the order of
+## add_system() calls defines the execution order.
 func add_system(system: EcsSystem, phase: int = 0) -> EcsSystem:
 	if _is_setup:
-		push_error("EcsScheduler: add_system() после setup_all() запрещён")
+		push_error("EcsScheduler: add_system() after setup_all() is not allowed")
 		return system
 	if _systems.has(system):
-		push_error("EcsScheduler: один и тот же объект системы зарегистрирован дважды")
+		push_error("EcsScheduler: the same system object is registered twice")
 		return system
 	if not system._assign_phase(phase, get_instance_id()):
 		return system
@@ -58,11 +59,11 @@ func add_system(system: EcsSystem, phase: int = 0) -> EcsSystem:
 	return system
 
 
-## Вызывает [method EcsSystem.setup] у каждой зарегистрированной системы.
-## Звать один раз, когда мир, все хранилища и весь список систем готовы.
+## Calls [method EcsSystem.setup] on every registered system. Call it once, when
+## the world, all stores and the whole system list are ready.
 func setup_all(world: EcsWorld, context) -> bool:
 	if _is_setup:
-		push_error("EcsScheduler: setup_all() уже был вызван")
+		push_error("EcsScheduler: setup_all() was already called")
 		return false
 	_world = world
 	_context = context
@@ -82,15 +83,15 @@ func teardown_all() -> void:
 	_context = null
 
 
-## Выполняет ВСЕ системы за один кадр, строго в порядке регистрации.
+## Runs ALL systems for one frame, strictly in registration order.
 ##
-## [param delta] передаётся системам как есть. Чтобы поставить симуляцию на
-## паузу, передайте 0.0: системы, объявившие [member EcsSystem.requires_time],
-## будут пропущены, а остальные (рендер, камера, HUD) продолжат работать — см.
+## [param delta] is passed to systems as-is. To pause the simulation, pass 0.0:
+## systems that declared [member EcsSystem.requires_time] are skipped, while the
+## rest (rendering, the camera, the HUD) keep working — see
 ## [method EcsSystem.execute].
 func execute_all(delta: float) -> void:
 	if not _is_setup:
-		push_error("EcsScheduler: execute_all() до setup_all()")
+		push_error("EcsScheduler: execute_all() before setup_all()")
 		return
 	begin_frame()
 	var total: int = _systems.size()
@@ -117,15 +118,14 @@ func execute_all(delta: float) -> void:
 			_executed[i] = 1
 
 
-## Закрывает замеры предыдущего кадра и очищает покадровое состояние. Вызывайте
-## один раз перед серией вызовов [method execute_phase]; [method execute_all]
-## делает это сам.
+## Closes the previous frame's measurements and clears per-frame state. Call it
+## once before a series of [method execute_phase] calls; [method execute_all]
+## does it itself.
 ##
-## Времена НАКАПЛИВАЮТСЯ между двумя begin_frame(), поэтому кадр с фиксированным
-## шагом, выполнивший фазу симуляции четыре раза, отчитается о суммарной
-## стоимости этих четырёх суб-шагов — то есть о том, что реально попало в
-## бюджет кадра. Сглаженное среднее сворачивается здесь, один раз за кадр, а не
-## на каждом суб-шаге.
+## Timings ACCUMULATE between two begin_frame() calls, so a fixed-step frame that
+## ran the simulation phase four times reports the total cost of those four
+## sub-steps — that is, what actually landed in the frame budget. The smoothed
+## average is folded here, once per frame, not per sub-step.
 func begin_frame() -> void:
 	if profiling_enabled:
 		for i in _average_usec.size():
@@ -134,11 +134,11 @@ func begin_frame() -> void:
 	_executed.fill(0)
 
 
-## Выполняет одну фазу в порядке регистрации. Фазы — это фильтр и метаданные;
-## планировщик никогда не сортирует системы автоматически.
+## Runs one phase in registration order. Phases are a filter and metadata; the
+## scheduler never sorts systems automatically.
 func execute_phase(phase: int, delta: float) -> void:
 	if not _is_setup:
-		push_error("EcsScheduler: execute_phase() до setup_all()")
+		push_error("EcsScheduler: execute_phase() before setup_all()")
 		return
 	var time_stopped: bool = delta <= 0.0
 	for i in _systems.size():
@@ -189,13 +189,12 @@ func set_system_phase(index: int, phase: int) -> void:
 	_executed[index] = 0
 
 
-## Разрешена ли система [param index] к запуску своей ФАЗОЙ — в отличие от
-## собственного выключателя [member EcsSystem.enabled].
+## Whether system [param index] is allowed to run by its PHASE — as opposed to
+## its own [member EcsSystem.enabled] switch.
 ##
-## Инструментам нужно отличать одно от другого: «эта система выключена» и
-## «выключена вся фаза, к которой она относится» выглядят в замерах одинаково,
-## но означают совершенно разное, когда ищешь, почему что-то перестало
-## происходить.
+## Tooling needs to tell these apart: "this system is off" and "the whole phase
+## it belongs to is off" look identical in the measurements but mean something
+## completely different when you are hunting for why something stopped happening.
 func is_phase_allowed(index: int) -> bool:
 	return _phase_allowed[index] == 1
 
@@ -223,8 +222,8 @@ func get_system_phase(index: int) -> int:
 	return _systems[index].system_phase
 
 
-## Индекс первой системы с таким именем, либо -1. Холодный путь; удобно, чтобы
-## переключить систему по имени из отладочной панели.
+## The index of the first system with this name, or -1. Cold path; handy for
+## toggling a system by name from a debug panel.
 func find_system(name: String) -> int:
 	for index in _systems.size():
 		if _systems[index].system_name == name:
@@ -236,15 +235,14 @@ func was_system_executed(index: int) -> bool:
 	return _executed[index] == 1
 
 
-## Время работы системы [param index] за последний кадр, в микросекундах.
-## Пока [member profiling_enabled] выключено, значения не обновляются.
+## The run time of system [param index] for the last frame, in microseconds.
+## While [member profiling_enabled] is off, the values are not updated.
 func get_timing_usec(index: int) -> float:
 	return _timings_usec[index]
 
 
-## Экспоненциально сглаженное время, в микросекундах. Намного стабильнее
-## покадрового значения — именно его обычно и хочет показывать отладочный
-## оверлей.
+## The exponentially smoothed time, in microseconds. Much steadier than the
+## per-frame value — this is usually the one a debug overlay wants to show.
 func get_average_timing_usec(index: int) -> float:
 	return _average_usec[index]
 
@@ -262,7 +260,7 @@ func reset_profiling() -> void:
 	_executed.fill(0)
 
 
-## Валидация на холодном пути — для инструментов сборки и тестов.
+## Cold-path validation — for build tools and tests.
 func validate_pipeline(world: EcsWorld, report_errors: bool = true) -> bool:
 	var valid := true
 	var previous_phase: int = -2_147_483_648
@@ -270,11 +268,11 @@ func validate_pipeline(world: EcsWorld, report_errors: bool = true) -> bool:
 		if system.system_name.is_empty() or system.system_name == "UnnamedSystem":
 			valid = false
 			if report_errors:
-				push_error("EcsScheduler: у системы нет диагностического имени")
+				push_error("EcsScheduler: a system has no diagnostic name")
 		if system.system_phase < previous_phase:
 			valid = false
 			if report_errors:
-				push_error("EcsScheduler: фазы должны идти неубывающе в порядке регистрации")
+				push_error("EcsScheduler: phases must be non-decreasing in registration order")
 		previous_phase = system.system_phase
 		for type_id in system.read_component_types:
 			valid = _validate_type(world, system, type_id, report_errors) and valid
@@ -285,16 +283,15 @@ func validate_pipeline(world: EcsWorld, report_errors: bool = true) -> bool:
 	return valid
 
 
-## Консервативный анализ зависимостей для инструментов и будущих параллельных
-## батчей. Текущий планировщик остаётся намеренно последовательным.
+## Conservative dependency analysis for tooling and future parallel batches. The
+## current scheduler stays deliberately sequential.
 func systems_conflict(first_index: int, second_index: int) -> bool:
 	var first: EcsSystem = _systems[first_index]
 	var second: EcsSystem = _systems[second_index]
 	if not first.access_metadata_complete or not second.access_metadata_complete:
 		return true
-	# Изменения жизненного цикла мира могут инвалидировать сырые id и любой
-	# View, поэтому они конфликтуют с каждой системой независимо от объявлений
-	# о компонентах.
+	# World lifecycle changes can invalidate raw ids and any View, so they
+	# conflict with every system regardless of component declarations.
 	if first.writes_world_structure or second.writes_world_structure:
 		return true
 	if _intersects(first.write_component_types, second.read_component_types) \
@@ -313,7 +310,7 @@ func _validate_type(world: EcsWorld, system: EcsSystem, type_id: int, report_err
 	if world.has_store(type_id):
 		return true
 	if report_errors:
-		push_error("EcsScheduler: система %s ссылается на незарегистрированный тип %d" % [system.system_name, type_id])
+		push_error("EcsScheduler: system %s references an unregistered type %d" % [system.system_name, type_id])
 	return false
 
 

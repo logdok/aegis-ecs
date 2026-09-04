@@ -1,26 +1,25 @@
 extends PanelContainer
 
-## Визуальная сторона [EcsInspector]. Необязательная и удаляемая.
+## The visual side of [EcsInspector]. Optional and removable.
 ##
-## Этот файл (и папку, в которой он лежит) можно удалить или исключить из
-## пресета экспорта, ничего больше не трогая: [EcsInspector] разрешает его по
-## пути во время выполнения и просто продолжает собирать данные без интерфейса,
-## когда файла нет. Ничто в библиотеке не ссылается на него по имени класса —
-## именно поэтому у него нет собственного `class_name`.
+## This file (and the folder it lives in) can be deleted or excluded from the
+## export preset with nothing else touched: [EcsInspector] resolves it by path at
+## runtime and simply keeps collecting data with no interface when the file is
+## gone. Nothing in the library references it by class name — which is exactly
+## why it has no `class_name` of its own.
 ##
-## [b]Он ведёт с собранной статистики, а не с живых цифр.[/b] Значение, которое
-## меняется шестьдесят раз в секунду, прочитать невозможно, а кадр, на который
-## вы смотрите, почти никогда не тот, что интересен. Поэтому таблица систем
-## показывает распределение по окну — типичную стоимость, худший случай,
-## насколько неровно, — а секция под ней называет системы, ответственные за
-## медленные кадры. Текущий кадр тоже есть, вверху, одной строкой: он стоит
-## взгляда, но не больше.
+## [b]It leads with collected statistics, not live numbers.[/b] A value that
+## changes sixty times a second is impossible to read, and the frame you are
+## looking at is almost never the interesting one. So the systems table shows the
+## distribution over the window — the typical cost, the worst case, how uneven it
+## is — and the section below it names the systems responsible for the slow
+## frames. The current frame is there too, at the top, on one line: worth a
+## glance, no more.
 ##
-## Построен целиком в коде, поэтому это один файл без зависимости от сцены.
-## Перерисовывается с фиксированной низкой частотой независимо от частоты
-## кадров: обновление этой панели стоит дороже, чем симуляция, которую она
-## измеряет, и ничто здесь не меняется настолько быстро, чтобы рисовать это
-## каждый кадр.
+## Built entirely in code, so it is a single file with no scene dependency.
+## Redrawn at a fixed low rate regardless of the frame rate: updating this panel
+## costs more than the simulation it measures, and nothing here changes fast
+## enough to warrant drawing it every frame.
 
 const COLOR_TEXT: String = "#d6dae0"
 const COLOR_DIM: String = "#7a828c"
@@ -29,10 +28,10 @@ const COLOR_GOOD: String = "#7fd18c"
 const COLOR_WARN: String = "#e5c07b"
 const COLOR_BAD: String = "#e08b7b"
 
-## Частота перерисовки. Сбор под ней по-прежнему идёт каждый кадр.
+## The redraw rate. Collection underneath it still runs every frame.
 const REFRESH_HZ: float = 6.0
 
-## Ниже этой ширины раскладка сворачивается в одну узкую колонку.
+## Below this width the layout collapses into a single narrow column.
 const COMPACT_WIDTH: float = 430.0
 
 var _inspector: EcsInspector
@@ -48,10 +47,10 @@ var _show_worst_frame: bool = true
 
 func _init() -> void:
 	name = "EcsInspectorPanel"
-	# Задаётся только минимальная ШИРИНА. Высота и итоговая ширина приходят от того
-	# контейнера, в который панель поместил хост, поэтому одна и та же панель
-	# работает и маленьким плавающим блоком, и боковой панелью во всю высоту, и
-	# двух вариантов для этого не нужно.
+	# Only the minimum WIDTH is set. The height and the final width come from the
+	# container the host placed the panel in, so the same panel works both as a
+	# small floating block and as a full-height side panel, and no two variants
+	# are needed for that.
 	custom_minimum_size = Vector2(280, 0)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -60,7 +59,7 @@ func _init() -> void:
 
 func _ready() -> void:
 	_font = SystemFont.new()
-	# Какой из них есть у платформы; последний — общий запасной вариант.
+	# Whichever the platform has; the last one is the generic fallback.
 	_font.font_names = PackedStringArray([
 		"Menlo", "SF Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono", "monospace",
 	])
@@ -102,25 +101,26 @@ func _ready() -> void:
 	_add_section(&"worst", "Worst frame in the window", false)
 	_add_section(&"world", "World and stores", false)
 
-	# Если bind() пришёл до входа в дерево, отрисовка была отложена до сюда.
+	# If bind() arrived before entering the tree, the drawing was deferred to here.
 	_refresh()
 
 
-## Вызывается [EcsInspector] сразу после создания панели.
+## Called by [EcsInspector] right after the panel is created.
 ##
-## Может прийти РАНЬШЕ `_ready()`: `add_child()` запускает `_ready()` только
-## если родитель уже в дереве, а хост вправе собрать панель в отсоединённом
-## контейнере. Поэтому здесь ссылка только запоминается, а отрисовку берёт на
-## себя `_refresh()`, который умеет ничего не делать, пока секций ещё нет.
+## It can arrive BEFORE `_ready()`: `add_child()` triggers `_ready()` only if the
+## parent is already in the tree, and the host may assemble the panel in a
+## detached container. So here the reference is only remembered, and the drawing
+## is left to `_refresh()`, which knows how to do nothing while there are no
+## sections yet.
 func bind(inspector: EcsInspector) -> void:
 	_inspector = inspector
 	_refresh()
 
 
 func _process(delta: float) -> void:
-	# Невидимую панель перерисовывать незачем: `_process` вызывается и у скрытых
-	# нод, поэтому проверка обязательна, иначе спрятанная панель продолжала бы
-	# стоить столько же, сколько открытая.
+	# There is no point redrawing an invisible panel: `_process` runs on hidden
+	# nodes too, so the check is mandatory, otherwise a hidden panel would keep
+	# costing as much as an open one.
 	if _inspector == null or not is_visible_in_tree():
 		return
 	_time_since_refresh += delta
@@ -130,7 +130,7 @@ func _process(delta: float) -> void:
 	_refresh()
 
 
-# --- построение ---------------------------------------------------------------
+# --- construction ------------------------------------------------------------
 
 func _build_header() -> Control:
 	var header := HBoxContainer.new()
@@ -159,11 +159,11 @@ func _build_header() -> Control:
 	return header
 
 
-## Сворачиваемая секция — отдельная карточка: подложка со скруглением, внутри
-## заголовок-переключатель и тело с форматированным текстом.
+## A collapsible section is its own card: a rounded background with a toggle
+## header inside and a body of formatted text.
 ##
-## Одна метка на секцию, а не виджет на строку, поэтому обновление — это
-## несколько присваиваний строк, а не перестройка дерева нод.
+## One label per section, not a widget per row, so an update is a few string
+## assignments rather than rebuilding a node tree.
 func _add_section(key: StringName, title: String, expanded: bool) -> void:
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -213,18 +213,18 @@ func _add_section(key: StringName, title: String, expanded: bool) -> void:
 
 func _set_section(key: StringName, text: String, visible_section: bool = true) -> void:
 	var section: Dictionary = _sections[key]
-	# Прячем карточку целиком: спрятать только её содержимое означало бы
-	# оставить на экране пустую подложку со скруглением.
+	# Hide the whole card: hiding only its content would leave an empty rounded
+	# background on screen.
 	section["card"].visible = visible_section
 	if visible_section:
 		section["content"].text = text
 
 
-# --- обновление ---------------------------------------------------------------
+# --- refresh ----------------------------------------------------------------
 
 func _refresh() -> void:
 	if _sections.is_empty():
-		# _ready() ещё не строил секции: рисовать нечем и незачем.
+		# _ready() has not built the sections yet: nothing to draw, and no reason to.
 		return
 	if _inspector == null:
 		_set_section(&"summary", _dim("Not bound to an inspector."))
@@ -252,7 +252,7 @@ func _refresh_summary(recorder: EcsFrameRecorder, stats: EcsFrameStats) -> void:
 	var ecs_now: float = recorder.get_frame_total_usec(newest)
 	var lines: PackedStringArray = PackedStringArray()
 
-	# Одна строка «прямо сейчас», всё остальное — про окно.
+	# One "right now" line, everything else is about the window.
 	var fps: float = Engine.get_frames_per_second()
 	lines.append("%s  %s   frame %s   ecs %s%s" % [
 		_dim("now"), _value("%.0f fps" % fps),
@@ -473,7 +473,7 @@ func _refresh_world(recorder: EcsFrameRecorder, stats: EcsFrameStats) -> void:
 	_set_section(&"world", "\n".join(lines))
 
 
-# --- взаимодействие -----------------------------------------------------------
+# --- interaction ------------------------------------------------------------
 
 func _on_meta_clicked(meta: Variant) -> void:
 	var text: String = str(meta)

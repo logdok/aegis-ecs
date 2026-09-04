@@ -1,13 +1,13 @@
 class_name EcsInspector
 extends RefCounted
 
-## Один вызов, который связывает воедино запись, статистику, диагностику и
-## (по желанию) визуальную панель.
+## One call that wires together recording, statistics, diagnostics and
+## (optionally) the visual panel.
 ##
 ## [codeblock]
 ## var inspector := EcsInspector.attach(scheduler, world, {
 ##     "mode": EcsInspector.Mode.DEV,
-##     "parent": $DebugLayer,          # уберите — будет сбор без интерфейса
+##     "parent": $DebugLayer,          # remove it -- collection runs with no interface
 ##     "clock": simulation_clock,
 ##     "grids": { "enemies": enemy_grid },
 ##     "queries": { "targets": target_query },
@@ -15,36 +15,36 @@ extends RefCounted
 ##
 ## func _process(delta: float) -> void:
 ##     scheduler.execute_all(delta)
-##     inspector.capture()             # последней строкой кадра
+##     inspector.capture()             # as the last line of the frame
 ## [/codeblock]
 ##
-## [b]Режимы.[/b] Сбор достаточно дёшев, чтобы отгружать его в релизе;
-## интерфейс нужен не всегда:
+## [b]Modes.[/b] Collection is cheap enough to ship in release; the interface is
+## not always wanted:
 ##
 ## [codeblock]
-## Mode.OFF        не работает ничего
-## Mode.TELEMETRY  запись + диагностика, без интерфейса  <- безопасно в релизе
-## Mode.INSPECTOR  + панель, только просмотр
-## Mode.DEV        + управление, меняющее симуляцию
+## Mode.OFF        nothing runs
+## Mode.TELEMETRY  recording + diagnostics, no interface   <- safe in release
+## Mode.INSPECTOR  + the panel, view only
+## Mode.DEV        + controls that change the simulation
 ## [/codeblock]
 ##
-## [b]Интерфейс можно убрать полностью.[/b] Удалите `inspector/` или исключите
-## его из пресета экспорта — и этот класс продолжит работать без панели: он
-## разрешает её через [method load] по пути, а не по имени класса, поэтому
-## отсутствующий файл — это null, а не ошибка разбора, которая утащит за собой
-## всю игру.
+## [b]The interface can be removed entirely.[/b] Delete `inspector/` or exclude
+## it from the export preset — and this class keeps working with no panel: it
+## resolves the panel through [method load] by path, not by class name, so a
+## missing file is null, not a parse error that would take the whole game down
+## with it.
 ##
-## Всё, что нужно панели помимо мира — запросы, сетки, часы, ваши собственные
-## счётчики — живёт вне библиотеки, поэтому передаётся сюда, а не разыскивается.
-## Ядро намеренно не держит их реестра.
+## Everything the panel needs beyond the world — queries, grids, clocks, your own
+## counters — lives outside the library, so it is passed in here rather than
+## discovered. The core deliberately keeps no registry of it.
 
 enum Mode {
 	OFF = 0,
-	## Запись и диагностика, без интерфейса. Достаточно дёшево для релизной сборки.
+	## Recording and diagnostics, no interface. Cheap enough for a release build.
 	TELEMETRY = 1,
-	## Добавить панель, только просмотр.
+	## Add the panel, view only.
 	INSPECTOR = 2,
-	## Добавить управление, меняющее симуляцию (выключение систем, пошаговый режим).
+	## Add controls that change the simulation (disabling systems, step mode).
 	DEV = 3,
 }
 
@@ -52,16 +52,16 @@ const _PANEL_RELATIVE_PATH: String = "../inspector/ecs_inspector_panel.gd"
 
 var mode: int = Mode.TELEMETRY
 
-## Как часто пересчитываются агрегаты, в герцах.
+## How often the aggregates are recomputed, in hertz.
 ##
-## Намеренно реже, чем отрисовка: медиана по сотням кадров почти не сдвигается
-## за десятую долю секунды, поэтому пересчитывать её чаще — не купить ничего и
-## потратить реальное время. Запись при этом идёт каждый кадр: не теряется
-## ничего, лениво обновляется только сводка.
+## Deliberately less often than the redraw: a median over hundreds of frames
+## barely moves in a tenth of a second, so recomputing it more often buys
+## nothing and spends real time. Recording still runs every frame: nothing is
+## lost, only the summary is updated lazily.
 var stats_refresh_hz: float = 2.0
 
-## Как часто выполняется диагностика, в герцах. Ещё реже: находки меняются
-## медленно, а некоторым правилам нужен зазор между замерами, чтобы измерить темп.
+## How often the diagnostics run, in hertz. Rarer still: findings change slowly,
+## and some rules need a gap between measurements to measure a rate.
 var diagnostics_refresh_hz: float = 0.5
 
 var recorder := EcsFrameRecorder.new()
@@ -82,9 +82,9 @@ var _diagnostics_due_ticks: int = 0
 var _attached: bool = false
 
 
-## Собирает инспектор и, если режим и родительская нода позволяют, панель.
-## Всегда возвращает объект — никогда null — поэтому вызывающему коду не нужны
-## ветвления.
+## Assembles the inspector and, if the mode and the parent node allow, the panel.
+## Always returns an object — never null — so the calling code needs no
+## branching.
 static func attach(scheduler: EcsScheduler, world: EcsWorld, options: Dictionary = {}) -> EcsInspector:
 	var inspector := EcsInspector.new()
 	inspector.mode = int(options.get("mode", Mode.TELEMETRY))
@@ -110,8 +110,8 @@ static func attach(scheduler: EcsScheduler, world: EcsWorld, options: Dictionary
 	return inspector
 
 
-## Записывает только что закончившийся кадр. Вызывайте один раз, последним
-## действием кадра, после того как отработали все фазы.
+## Records the frame that just finished. Call it once, as the last action of the
+## frame, after every phase has run.
 func capture() -> void:
 	if not _attached:
 		return
@@ -132,8 +132,8 @@ func capture() -> void:
 			_findings = diagnostics.inspect(recorder, stats, _world, _build_extras())
 
 
-## Принудительно и немедленно пересчитывает агрегаты и диагностику, игнорируя
-## частоты обновления. Используйте перед печатью отчёта по требованию.
+## Forces an immediate recompute of the aggregates and diagnostics, ignoring the
+## refresh rates. Use it before printing a report on demand.
 func refresh_now() -> void:
 	if not _attached:
 		return
@@ -141,31 +141,30 @@ func refresh_now() -> void:
 	_findings = diagnostics.inspect(recorder, stats, _world, _build_extras())
 
 
-## Находки диагностики последнего прогона, худшие первыми.
+## The diagnostics findings from the last run, worst first.
 func get_findings() -> Array:
 	return _findings
 
 
-## Регистрирует группу счётчиков приложения, показываемых вверху панели.
+## Registers a group of application counters shown at the top of the panel.
 ##
-## Библиотека ничего не знает о вашей игре, поэтому не может сама показать
-## «живых врагов» или «здоровье ядра». [param provider] возвращает строки как
-## `[[подпись, значение], ...]`; значения могут быть любыми, они приводятся к
-## тексту.
+## The library knows nothing about your game, so it cannot show "live enemies" or
+## "core health" on its own. [param provider] returns rows as
+## `[[label, value], ...]`; the values can be anything, they are stringified.
 ##
-## Он вызывается с частотой обновления панели, а не каждый кадр, поэтому даже
-## дорогой расчёт внутри него не касается бюджета кадра.
+## It is called at the panel's refresh rate, not every frame, so even an
+## expensive computation inside it does not touch the frame budget.
 ##
 ## [codeblock]
-## inspector.add_counter_section("Популяция", func() -> Array:
+## inspector.add_counter_section("Population", func() -> Array:
 ##     return [
-##         ["Активных", "%d / %d" % [my_store.count, my_target]],
-##         ["Всего за забег", my_total],
+##         ["Active",      "%d / %d" % [my_store.count, my_target]],
+##         ["Run total",   my_total],
 ##     ])
 ## [/codeblock]
 func add_counter_section(title: String, provider: Callable) -> void:
 	if not provider.is_valid():
-		push_error("EcsInspector: у секции счётчиков «%s» недействительный провайдер" % title)
+		push_error("EcsInspector: the counter section '%s' has an invalid provider" % title)
 		return
 	_counter_sections.append({"title": title, "provider": provider})
 
@@ -178,7 +177,7 @@ func get_counter_section_title(index: int) -> String:
 	return _counter_sections[index]["title"]
 
 
-## Вычисляет одну секцию. Возвращает строки как `[[подпись, значение], ...]`.
+## Evaluates one section. Returns rows as `[[label, value], ...]`.
 func get_counter_section_rows(index: int) -> Array:
 	var provider: Callable = _counter_sections[index]["provider"]
 	if not provider.is_valid():
@@ -219,8 +218,8 @@ func get_scheduler() -> EcsScheduler:
 	return _scheduler
 
 
-## True, когда визуальная панель действительно существует. False в режиме
-## TELEMETRY и false, когда папка `inspector/` вырезана из сборки.
+## True when the visual panel actually exists. False in TELEMETRY mode, and false
+## when the `inspector/` folder has been stripped from the build.
 func has_panel() -> bool:
 	return _panel != null and is_instance_valid(_panel)
 
@@ -229,28 +228,28 @@ func get_panel() -> Node:
 	return _panel
 
 
-## Показывает или скрывает панель, если она есть.
+## Shows or hides the panel, if there is one.
 func set_panel_visible(value: bool) -> void:
 	if has_panel():
 		_panel.visible = value
 
 
-## Печатает полный текстовый отчёт. Работает в любом режиме, кроме OFF, с
-## панелью и без неё.
+## Prints the full text report. Works in any mode except OFF, with a panel and
+## without.
 func print_report() -> void:
 	refresh_now()
 	print(EcsReport.to_text(recorder, stats, _world, _findings))
 
 
-## Печатает разбор самого худшего кадра окна — того, который реально дал рывок
-## и который живой показ показать не в состоянии.
+## Prints a breakdown of the window's worst frame — the one that actually caused
+## a hitch and that a live view cannot show.
 func print_worst_frame() -> void:
 	refresh_now()
 	print(EcsReport.frame_to_text(recorder, stats.get_worst_frame_slot(), stats))
 
 
-## Записывает report.txt / report.json / frames.csv в [param directory].
-## Возвращает число записанных файлов.
+## Writes report.txt / report.json / frames.csv into [param directory]. Returns
+## the number of files written.
 func save_report(directory: String = "user://") -> int:
 	refresh_now()
 	var written: int = 0
@@ -263,7 +262,7 @@ func save_report(directory: String = "user://") -> int:
 	return written
 
 
-## Убирает панель и прекращает сбор.
+## Removes the panel and stops collecting.
 func detach() -> void:
 	if has_panel():
 		_panel.queue_free()
@@ -276,17 +275,18 @@ func _build_extras() -> Dictionary:
 	return {"clock": _clock, "queries": _queries, "grids": _grids}
 
 
-## Разрешает панель рядом с этим скриптом, а не по жёстко прописанному пути в
-## проекте, поэтому аддон продолжает работать после копирования куда угодно.
-## Загрузка по пути (а не по имени класса) — это ровно то, что позволяет
-## исключить всю папку `inspector/` из экспорта, не сломав этот файл.
+## Resolves the panel next to this script, not by a path hard-coded into the
+## project, so the add-on keeps working after it is copied anywhere. Loading by
+## path (rather than by class name) is exactly what lets the whole `inspector/`
+## folder be excluded from the export without breaking this file.
 func _create_panel(parent: Node) -> void:
 	var own_path: String = get_script().resource_path
 	if own_path.is_empty():
 		return
 	var panel_path: String = own_path.get_base_dir().path_join(_PANEL_RELATIVE_PATH).simplify_path()
 	if not ResourceLoader.exists(panel_path):
-		# Интерфейс вырезан из этой сборки: молча снижаемся до одного лишь сбора.
+		# The interface is stripped from this build: silently degrade to
+		# collection only.
 		return
 	var panel_script: Script = load(panel_path)
 	if panel_script == null:

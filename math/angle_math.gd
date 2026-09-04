@@ -1,29 +1,29 @@
 class_name AngleMath
 extends RefCounted
 
-## Вспомогательные функции для работы с углами — всё, что нужно, чтобы плавно
-## доворачивать что-либо к желаемому направлению.
+## Helper functions for working with angles — everything needed to smoothly turn
+## something toward a desired direction.
 ##
-## Независимый модуль: не использует ECS и может быть удалён из аддона, если
-## не нужен.
+## An independent module: it does not use ECS and can be removed from the add-on
+## if you do not need it.
 
-## Сдвигает [param current] в сторону [param desired] не более чем на
-## [param max_step], всегда кратчайшим путём по кругу.
+## Moves [param current] toward [param desired] by no more than [param max_step],
+## always along the shortest path around the circle.
 ##
-## Почему это нетривиально: наивное
-## `current += clamp(desired - current, -max_step, max_step)` ломается на
-## переходе через ±PI. Если current = 3.1 рад, а desired = -3.1 рад, разница
-## "в лоб" равна -6.2 рад, хотя кратчайший путь между этими углами — всего
-## 0.08 рад в ДРУГУЮ сторону. [method @GlobalScope.wrapf] с диапазоном
-## (-PI, PI) как раз приводит разницу к кратчайшему эквиваленту, прежде чем
-## её ограничат шагом.
+## Why this is not trivial: the naive
+## `current += clamp(desired - current, -max_step, max_step)` breaks at the ±PI
+## crossover. If current = 3.1 rad and desired = -3.1 rad, the "straight"
+## difference is -6.2 rad, even though the shortest path between those angles is
+## only 0.08 rad the OTHER way. [method @GlobalScope.wrapf] with a range of
+## (-PI, PI) brings the difference to its shortest equivalent before the step
+## clamp.
 static func approach(current: float, desired: float, max_step: float) -> float:
 	return current + clampf(wrapf(desired - current, -PI, PI), -max_step, max_step)
 
 
-## Абсолютная кратчайшая угловая дистанция между двумя углами, в радианах
-## (всегда неотрицательная). Нужна там, где важно только "насколько далеко",
-## а не "в какую сторону" — например, при проверке, достаточно ли точно
-## что-либо наведено на цель, прежде чем действовать.
+## The absolute shortest angular distance between two angles, in radians (always
+## non-negative). Needed where only "how far" matters, not "which way" — for
+## example, when checking whether something is aimed accurately enough at a
+## target before acting.
 static func shortest_delta(from_angle: float, to_angle: float) -> float:
 	return absf(wrapf(to_angle - from_angle, -PI, PI))

@@ -1,13 +1,13 @@
 extends SceneTree
 
-## Самопроверка пакетного, декларативного и инструментального API.
+## A self-test of the batched, declarative and tooling API.
 ##
 ##   godot --headless --script res://addons/aegis_ecs/tests/test_ecs_features.gd
 ##
-## Пакетные пути уничтожения — самая рискованная часть библиотеки: они обязаны
-## быть неотличимы от вызова detach() на каждую сущность, включая перенос данных
-## и очистку владения. Поэтому несколько случаев здесь сверяют быстрый путь с
-## наивной эталонной моделью, а не с подобранными вручную значениями.
+## The batched destruction paths are the riskiest part of the library: they must
+## be indistinguishable from calling detach() on each entity, including data
+## relocation and ownership cleanup. So several cases here check the fast path
+## against a naive reference model rather than against hand-picked values.
 
 const TYPE_A: int = 0
 const TYPE_B: int = 1
@@ -52,8 +52,8 @@ class DeclarativeStore extends EcsPackedStore:
 		return slot
 
 
-## Декларативное хранилище, которое к тому же чем-то владеет: проверяет путь
-## владения поверх обобщённого переноса.
+## A declarative store that also owns something: it exercises the ownership path
+## on top of the generic relocation.
 class OwningDeclarativeStore extends EcsPackedStore:
 	var numbers: PackedInt32Array = PackedInt32Array()
 	var released: PackedInt32Array = PackedInt32Array()
@@ -106,7 +106,7 @@ func _init() -> void:
 	quit(1 if _failures > 0 else 0)
 
 
-# --- пакетное создание --------------------------------------------------------
+# --- batched creation ------------------------------------------------------
 
 func _test_batch_creation() -> void:
 	var world := EcsWorld.new(64)
@@ -125,7 +125,7 @@ func _test_batch_creation() -> void:
 	_expect(all_alive, "every batched id is alive")
 	_expect(seen.size() == 10, "batched ids are unique")
 
-	# Просим больше, чем осталось: должно зажать, а не выйти за границу.
+	# Ask for more than is left: it should clamp, not go out of bounds.
 	created = world.create_entities(1000, buffer)
 	_expect(created == 54, "create_entities() clamps to the free pool")
 	_expect(world.create_entities(1, buffer) == 0, "a full world creates nothing")
@@ -160,10 +160,10 @@ func _test_batch_attach() -> void:
 	_expect(store.validate_integrity(PackedByteArray(), false), "store is consistent after attach_many()")
 
 
-# --- пакетное уничтожение против эталонной модели ------------------------------
+# --- batched destruction against the reference model ---------------------
 
-## Применяет одни и те же удаления по одному через detach() и через пакетный
-## путь, затем сравнивает получившееся отображение «сущность -> данные».
+## Applies the same removals one at a time through detach() and through the
+## batched path, then compares the resulting "entity -> data" mapping.
 func _test_batch_detach_matches_reference() -> void:
 	var random := RandomNumberGenerator.new()
 	random.seed = 0xBA7C4
@@ -234,8 +234,8 @@ func _test_full_wipe() -> void:
 	_expect(store.count == 0, "the store is empty after a full wipe")
 	_expect(store.validate_integrity(PackedByteArray(), false), "an emptied store is still consistent")
 
-	# Случай «вся популяция» — это то, ради чего сделано срезание хвоста; здесь
-	# утверждается его корректность, а скорость измеряется в benchmark_ecs.gd.
+	# The "whole population" case is what the tail trimming exists for; its
+	# correctness is asserted here, and its speed is measured in benchmark_ecs.gd.
 	var partial := _build_store(population)
 	var half := PackedByteArray()
 	half.resize(population)
@@ -270,7 +270,7 @@ func _stores_agree(first: ManualStore, second: ManualStore, population: int) -> 
 	return true
 
 
-# --- декларативное хранилище --------------------------------------------------
+# --- declarative store ---------------------------------------------------
 
 func _test_packed_store() -> void:
 	var world := EcsWorld.new(32)
@@ -283,7 +283,7 @@ func _test_packed_store() -> void:
 		world.create_entity()
 		store.assign(entity, entity)
 
-	# Удаляем из середины, чтобы перенос действительно выполнился.
+	# Remove from the middle so a relocation actually happens.
 	store.detach(2)
 	store.detach(5)
 	var intact := true
@@ -335,7 +335,7 @@ func _test_packed_store_ownership() -> void:
 		var slot: int = store.attach(entity)
 		store.numbers[slot] = entity + 1
 
-	# Отсоединение головы вызывает и перенос, и освобождение.
+	# Detaching the head triggers both a relocation and a release.
 	store.detach(0)
 	_expect(store.released.size() == 1 and store.released[0] == 1,
 		"a declarative store with _release_dense() still releases the removed payload")
@@ -345,7 +345,7 @@ func _test_packed_store_ownership() -> void:
 	_expect(store.numbers[store.count] == 0, "the moved-from slot was cleared, not freed again")
 
 
-# --- журнал изменений ---------------------------------------------------------
+# --- change log --------------------------------------------------------
 
 func _test_change_log() -> void:
 	var world := EcsWorld.new(32)
@@ -377,7 +377,7 @@ func _test_change_log() -> void:
 	store.clear()
 	_expect(store.change_log_overflowed, "clear() reports an overflow instead of logging everyone")
 
-	# Хранилище с выключенным журналом не должно платить за буферы.
+	# A store with the log disabled should not pay for the buffers.
 	var quiet := ManualStore.new()
 	var quiet_world := EcsWorld.new(8)
 	quiet_world.register_store(quiet, TYPE_A)
@@ -386,7 +386,7 @@ func _test_change_log() -> void:
 	_expect(quiet.added_entities.size() == 0, "tracking off allocates no log buffers")
 
 
-# --- готовые системы ----------------------------------------------------------
+# --- ready-made systems ------------------------------------------------
 
 func _test_reaper_system() -> void:
 	var world := EcsWorld.new(32)
@@ -408,7 +408,7 @@ func _test_reaper_system() -> void:
 	_expect(reaper.total_reaped == 2, "EcsReaperSystem accumulates a total")
 	_expect(world.get_live_count() == 3, "EcsReaperSystem actually destroyed the entities")
 
-	# Он обязан продолжать жать и на паузе игры, иначе очередь будет копиться.
+	# It must keep reaping while the game is paused, otherwise the queue piles up.
 	world.queue_destroy(0)
 	scheduler.execute_all(0.0)
 	_expect(reaper.last_reaped == 1, "EcsReaperSystem runs on a zero-length step")
@@ -422,8 +422,8 @@ func _test_capacity_policy() -> void:
 	policy.grow_threshold = 0.5
 	policy.growth_factor = 2.0
 	policy.check_interval_frames = 1
-	# Лямбда GDScript захватывает локальные переменные ПО ЗНАЧЕНИЮ, поэтому
-	# размеры должны попадать в общий контейнер, а не в обычные локальные переменные.
+	# A GDScript lambda captures local variables BY VALUE, so the sizes must land
+	# in a shared container rather than in plain local variables.
 	var growth_report := PackedInt32Array([-1, -1])
 	policy.on_capacity_grown = func(previous: int, next: int) -> void:
 		growth_report[0] = previous
@@ -483,8 +483,8 @@ func _test_scheduler_timing() -> void:
 	scheduler.add_system(presentation, 200)
 	scheduler.setup_all(world, null)
 
-	# Кадр с суб-шагами: фаза симуляции выполняется несколько раз, и её замеры
-	# обязаны суммироваться, а не отчитываться только о последнем суб-шаге.
+	# A frame with sub-steps: the simulation phase runs several times, and its
+	# measurements must sum up rather than report only the last sub-step.
 	scheduler.begin_frame()
 	for substep in 4:
 		scheduler.execute_phase(100, 1.0 / 60.0)
@@ -531,7 +531,7 @@ func _test_simulation_clock() -> void:
 		"reset() clears every counter")
 
 
-# --- пространственная сетка ---------------------------------------------------
+# --- spatial grid ------------------------------------------------------
 
 func _test_grid_flat_mode() -> void:
 	var rng := RandomNumberGenerator.new()
@@ -554,7 +554,7 @@ func _test_grid_flat_mode() -> void:
 	_expect(flat.is_flat() and flat.get_dimensions().y == 1, "flat mode collapses to one Y layer")
 	_expect(flat.get_cell_count() < spatial.get_cell_count(), "flat mode uses fewer cells")
 
-	# Одни и те же данные на плоскости обязаны дать одинаковые ответы.
+	# The same data on a plane must give identical answers.
 	var agree := true
 	for q in 64:
 		var center: Vector3 = points[q * 6]
@@ -564,8 +564,8 @@ func _test_grid_flat_mode() -> void:
 		agree = agree and flat_hits == spatial_hits
 	_expect(agree, "flat and 3D grids agree on planar data")
 
-	# Перекрёстная проверка полным перебором: broadphase, который молча теряет
-	# соседей, — худший из возможных багов.
+	# A cross-check by brute force: a broadphase that silently loses neighbours is
+	# the worst kind of bug there is.
 	var exact := true
 	for q in 32:
 		var center: Vector3 = points[q * 11]
@@ -610,8 +610,8 @@ func _test_grid_helpers() -> void:
 
 # --- fuzz ---------------------------------------------------------------------
 
-## Случайная структурная текучка через пакетные пути, сверяемая с простой
-## моделью на Dictionary: что именно должна содержать каждая живая сущность.
+## Random structural churn through the batched paths, checked against a simple
+## Dictionary model of what each live entity should contain.
 func _test_structural_fuzz() -> void:
 	var world := EcsWorld.new(256)
 	var store := DeclarativeStore.new()

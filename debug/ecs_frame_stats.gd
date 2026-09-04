@@ -1,22 +1,22 @@
 class_name EcsFrameStats
 extends RefCounted
 
-## Превращает окно записанных кадров в ответы.
+## Turns a window of recorded frames into answers.
 ##
-## Цифры одного кадра — это шум: достаточно одной заминки ОС внутри окна замера
-## одной системы, и показание бессмысленно. Смотреть стоит на распределение —
-## типичную стоимость, ту, под которой остаётся большинство кадров, худший
-## случай — и, главное, на то, [b]какая система отвечает за всплески[/b].
+## A single frame's numbers are noise: one OS stall inside one system's
+## measurement window and the reading is meaningless. What to look at is the
+## distribution — the typical cost, what most frames stay under, the worst case —
+## and, above all, [b]which system is responsible for the spikes[/b].
 ##
-## На последний вопрос живой показ ответить не способен в принципе, а здесь он
-## решается автоматически: для каждого затянувшегося кадра превышение над
-## СОБСТВЕННОЙ медианой системы приписывается этой системе, и итоги ранжируются.
-## Вместо того чтобы смотреть на мельтешение и гадать, вы получаете
-## «MissileSpatialIndex отвечает за 71% избытка в медленных кадрах».
+## A live view cannot answer the last question at all, and here it is solved
+## automatically: for each frame that ran long, the amount by which a system
+## exceeded its OWN median is attributed to that system, and the totals are
+## ranked. Instead of staring at flicker and guessing, you get
+## "MissileSpatialIndex accounts for 71% of the excess in slow frames".
 ##
-## [method analyse] — холодная операция: она сортирует окно по каждой системе.
-## Вызывайте её, когда собираетесь читать результаты (обновление панели, отчёт),
-## а не каждый кадр.
+## [method analyse] is a cold operation: it sorts the window per system. Call it
+## when you are about to read the results (a panel refresh, a report), not every
+## frame.
 ##
 ## [codeblock]
 ## var stats := EcsFrameStats.new()
@@ -27,10 +27,10 @@ extends RefCounted
 ##     print(recorder.get_system_name(i), stats.get_system_excess_share(i))
 ## [/codeblock]
 
-## Кадр считается всплеском, когда стоит во столько раз больше медианного.
+## A frame counts as a spike when it costs this many times the median.
 var spike_factor: float = 1.5
 
-## Процентиль, сообщаемый как «под чем остаётся большинство кадров».
+## The percentile reported as "what most frames stay under".
 var high_percentile: float = 0.95
 
 var _system_count: int = 0
@@ -65,8 +65,8 @@ var _peak_pending: int = 0
 var _analysed: bool = false
 
 
-## Пересчитывает все агрегаты по текущему окну рекордера.
-## Возвращает false, когда анализировать ещё нечего.
+## Recomputes every aggregate over the recorder's current window.
+## Returns false when there is nothing to analyse yet.
 func analyse(recorder: EcsFrameRecorder) -> bool:
 	_analysed = false
 	if recorder == null or not recorder.is_configured():
@@ -88,9 +88,9 @@ func analyse(recorder: EcsFrameRecorder) -> bool:
 	_scratch.resize(_frame_count)
 	_slots.resize(_frame_count)
 
-	# Порядок кольца разрешаем один раз. Всё ниже индексирует плоские буферы
-	# арифметически: при system_count x frame_count ячейках вызов метода на каждую
-	# стоил бы больше, чем весь остальной анализ.
+	# Resolve the ring order once. Everything below indexes the flat buffers
+	# arithmetically: over system_count x frame_count cells, a method call per
+	# cell would cost more than all the rest of the analysis.
 	var ring_capacity: int = recorder.frame_capacity
 	var oldest: int = recorder.get_oldest_slot()
 	var slots: PackedInt32Array = _slots
@@ -102,7 +102,7 @@ func analyse(recorder: EcsFrameRecorder) -> bool:
 	var stride: int = _system_count
 	var executed_status: int = EcsFrameRecorder.Status.EXECUTED
 
-	# --- распределение по кадрам ---------------------------------------------
+	# --- per-frame distribution -------------------------------------------
 	var frame_sum: float = 0.0
 	_frame_max = -1.0
 	_frame_min = INF
@@ -140,7 +140,7 @@ func analyse(recorder: EcsFrameRecorder) -> bool:
 	if _frame_min == INF:
 		_frame_min = 0.0
 
-	# --- распределение по системам -------------------------------------------
+	# --- per-system distribution ----------------------------------------
 	for system in _system_count:
 		var sum: float = 0.0
 		var peak: float = 0.0
@@ -162,17 +162,17 @@ func analyse(recorder: EcsFrameRecorder) -> bool:
 		_median[system] = _percentile(_scratch, 0.5)
 		_high[system] = _percentile(_scratch, high_percentile)
 
-	# --- атрибуция всплесков --------------------------------------------------
-	# Каждой системе вменяется ровно то, насколько она превысила СВОЮ СОБСТВЕННУЮ
-	# медиану, просуммированное по самым медленным кадрам. Система, которая просто
-	# дорога каждый кадр, не вносит сюда ничего; та, что изредка взрывается,
-	# вносит всё. В этом различии и весь смысл.
+	# --- spike attribution ----------------------------------------------
+	# Each system is charged exactly the amount by which it exceeded its OWN
+	# median, summed over the slowest frames. A system that is simply expensive
+	# every frame contributes nothing here; one that occasionally explodes
+	# contributes everything. That distinction is the whole point.
 	#
-	# Разбирается медленный ХВОСТ (кадры выше p95), а не «кадры выше кратного
-	# медиане». Окно может быть совершенно здоровым и всё равно иметь самые
-	# медленные 5%, которые стоит объяснить, и этот вопрос осмыслен даже когда
-	# ничего не сломано. А нездорово ли окно на самом деле — отдельный сигнал:
-	# get_spike_frame_count(), который как раз использует кратность.
+	# The slow TAIL is analysed (frames above p95), not "frames above a multiple
+	# of the median". A window can be perfectly healthy and still have a slowest
+	# 5% worth explaining, and that question makes sense even when nothing is
+	# broken. Whether the window is actually unhealthy is a separate signal:
+	# get_spike_frame_count(), which does use the multiple.
 	var tail_threshold: float = _frame_high
 	var spike_threshold: float = _frame_median * spike_factor
 	_spike_count = 0
@@ -213,22 +213,22 @@ func get_system_count() -> int:
 	return _system_count
 
 
-# --- результаты по кадру ------------------------------------------------------
+# --- per-frame results ------------------------------------------------------
 
-## Среднее время ECS на кадр за окно.
+## The average ECS time per frame over the window.
 func get_frame_average_usec() -> float:
 	return _frame_avg
 
 
-## Типичный кадр. Оценивая стоимость, предпочитайте эту величину среднему:
-## среднее утягивает за собой одна-единственная заминка, медиану — нет.
+## The typical frame. When estimating cost, prefer this to the mean: a single
+## stall drags the mean along, the median not.
 func get_frame_median_usec() -> float:
 	return _frame_median
 
 
-## То, под чем остаётся большинство кадров (по умолчанию 95-й процентиль).
-## Именно это число сравнивают с бюджетом кадра — среднее прячет как раз те
-## кадры, которые и дают рывки.
+## What most frames stay under (the 95th percentile by default). This is the
+## number to compare against the frame budget — the mean hides exactly the
+## frames that cause the hitches.
 func get_frame_p95_usec() -> float:
 	return _frame_high
 
@@ -241,33 +241,33 @@ func get_frame_min_usec() -> float:
 	return _frame_min
 
 
-## Слот кольца с самым дорогим кадром окна — чтобы разобрать по полочкам именно
-## его. -1, если окно пусто.
+## The ring slot with the most expensive frame in the window — so you can
+## dissect exactly that one. -1 if the window is empty.
 func get_worst_frame_slot() -> int:
 	return _worst_slot
 
 
-## Сколько кадров окна превысили медиану в [member spike_factor] раз.
+## How many frames in the window exceeded the median by [member spike_factor].
 func get_spike_frame_count() -> int:
 	return _spike_count
 
 
-## Доля окна, в которой кадры затянулись, в процентах.
+## The fraction of the window in which frames ran long, as a percentage.
 func get_spike_frame_percent() -> float:
 	if _frame_count <= 0:
 		return 0.0
 	return float(_spike_count) / float(_frame_count) * 100.0
 
 
-## Отношение худшего кадра к типичному. Выше ~2 — это заметный рывок, даже если
-## среднее выглядит прилично.
+## The ratio of the worst frame to the typical one. Above ~2 it is a noticeable
+## hitch, even if the average looks fine.
 func get_spike_ratio() -> float:
 	if _frame_median <= 0.0:
 		return 0.0
 	return _frame_max / _frame_median
 
 
-# --- результаты по системам ---------------------------------------------------
+# --- per-system results ---------------------------------------------------
 
 func get_system_average_usec(index: int) -> float:
 	return _avg[index]
@@ -285,36 +285,37 @@ func get_system_max_usec(index: int) -> float:
 	return _max[index]
 
 
-## Доля от всего времени ECS за окно, в процентах.
+## The fraction of all ECS time over the window, as a percentage.
 func get_system_share_percent(index: int) -> float:
 	return _share[index]
 
 
-## Кадры, в которых эта система реально выполнялась (а не была на паузе,
-## выключена или в выключенной фазе).
+## The frames in which this system actually ran (rather than being paused,
+## disabled or in a disabled phase).
 func get_system_executed_frames(index: int) -> int:
 	return _executed_frames[index]
 
 
-## Насколько система стабильна: максимум, делённый на медиану. Значение около 1
-## означает ровную стоимость каждый кадр; большое — что она изредка взрывается,
-## а это и есть то, что ощущается как рывок.
+## How stable a system is: the max divided by the median. A value near 1 means an
+## even cost every frame; a large value means it occasionally explodes, which is
+## what feels like a hitch.
 ##
-## Медиана снизу ограничена одной микросекундой, поэтому система, обычно
-## бесплатная и изредка стоящая 46 мкс, отчитается как 46x, а не поделит на ноль
-## и не притворится идеально стабильной — что было бы прямо противоположно правде.
+## The median is bounded below by one microsecond, so a system that is usually
+## free and occasionally costs 46 us reports 46x rather than dividing by zero and
+## pretending to be perfectly stable — which would be the exact opposite of the
+## truth.
 func get_system_volatility(index: int) -> float:
 	return _max[index] / maxf(_median[index], 1.0)
 
 
-## Сколько микросекунд эта система добавила сверх собственной медианы,
-## просуммировано по медленным кадрам.
+## How many microseconds this system added above its own median, summed over the
+## slow frames.
 func get_system_excess_usec(index: int) -> float:
 	return _excess[index]
 
 
-## То же самое как доля от всего избытка в медленных кадрах. Это и есть число
-## «кто виноват в рывках».
+## The same as a fraction of all the excess in slow frames. This is the
+## "who is to blame for the hitches" number.
 func get_system_excess_share(index: int) -> float:
 	if _total_excess <= 0.0:
 		return 0.0
@@ -325,14 +326,14 @@ func get_total_excess_usec() -> float:
 	return _total_excess
 
 
-## По скольким кадрам разносился избыток (медленный хвост).
+## How many frames the excess was spread across (the slow tail).
 func get_attributed_frame_count() -> int:
 	return _attributed_frames
 
 
-# --- ранжирование виновников --------------------------------------------------
+# --- ranking of the culprits --------------------------------------------
 
-## Системы, упорядоченные по вкладу в медленные кадры, худшие первыми.
+## Systems ordered by their contribution to slow frames, worst first.
 func get_spike_contributor_count() -> int:
 	return _ranking.size()
 
@@ -341,7 +342,7 @@ func get_spike_contributor(rank: int) -> int:
 	return _ranking[rank]
 
 
-# --- мир за окно --------------------------------------------------------------
+# --- the world over the window -----------------------------------------
 
 func get_live_min() -> int:
 	return _live_min
@@ -351,13 +352,13 @@ func get_live_max() -> int:
 	return _live_max
 
 
-## Сколько раз за окно менялась ёмкость мира.
+## How many times the world's capacity changed over the window.
 func get_capacity_change_count() -> int:
 	return _capacity_changes
 
 
-## Наибольшая очередь уничтожения, замеченная в конце кадра. Любое значение
-## больше нуля означает, что очередь не спорожняется там, где должна.
+## The largest destroy queue seen at the end of a frame. Any value above zero
+## means the queue is not being drained where it should be.
 func get_peak_pending_destroy() -> int:
 	return _peak_pending
 
@@ -370,9 +371,9 @@ func _percentile(sorted_values: PackedFloat32Array, quantile: float) -> float:
 	return sorted_values[index]
 
 
-## Сортировка вставками по массиву индексов: систем немного (десятки), и всё это
-## холодный путь, поэтому простая устойчивая сортировка сохраняет порядок
-## регистрации при равенстве — так читается лучше, чем при произвольном.
+## Insertion sort over an index array: there are only a few systems (dozens) and
+## this is all cold path, so a simple stable sort keeps the registration order on
+## ties — which reads better than an arbitrary one.
 func _sort_ranking_by_excess() -> void:
 	var ranking: PackedInt32Array = _ranking
 	for i in range(1, ranking.size()):

@@ -1,14 +1,14 @@
 extends SceneTree
 
-## Самопроверка отладочной части: рекордер, статистика, диагностика, отчёт и
-## фасад инспектора.
+## A self-test of the debug part: the recorder, statistics, diagnostics, the
+## report and the inspector facade.
 ##
 ##   godot --headless --script res://addons/aegis_ecs/tests/test_inspector.gd
 ##
-## Самый интересный случай — атрибуция всплесков: система, дешёвая в среднем, но
-## изредка дорогая, обязана оказаться выше системы, дорогой равномерно, потому
-## что рывок игрок чувствует только от первой. Это проверяется двумя системами,
-## поведение которых устроено так, чтобы различаться ровно этим.
+## The most interesting case is spike attribution: a system that is cheap on
+## average but occasionally expensive must rank above a system that is expensive
+## evenly, because the player only feels a hitch from the first. This is checked
+## with two systems whose behaviour is arranged to differ in exactly that way.
 
 const TYPE_A: int = 0
 const TYPE_TAG: int = 1
@@ -24,7 +24,7 @@ class DemoStore extends EcsPackedStore:
 		track(&"health", &"position")
 
 
-## Стоит примерно одинаково каждый кадр.
+## Costs roughly the same every frame.
 class SteadySystem extends EcsSystem:
 	var work: int = 900
 
@@ -38,8 +38,8 @@ class SteadySystem extends EcsSystem:
 			sink += sqrt(float(i))
 
 
-## Почти всегда дешёвая, дорогая раз в [member period] кадров — та самая форма,
-## которая даёт рывки, почти не сдвигая среднее.
+## Almost always cheap, expensive once every [member period] frames — the exact
+## shape that causes hitches while barely moving the average.
 class SpikySystem extends EcsSystem:
 	var period: int = 10
 	var burst: int = 9000
@@ -86,15 +86,15 @@ func _init() -> void:
 	quit(1 if _failures > 0 else 0)
 
 
-# --- добавления в ядро, на которых держится отладочная часть -------------------
+# --- core additions the debug part relies on -------------------------------
 
 func _test_core_additions() -> void:
 	var world := EcsWorld.new(32)
 	var store := DemoStore.new()
 	world.register_store(store, TYPE_A)
 
-	# У внутренних классов нет глобального имени, поэтому здесь проверяется
-	# запасной вариант; хранилище, объявленное через class_name, сообщит это имя.
+	# Inner classes have no global name, so this checks the fallback; a store
+	# declared with class_name would report that name.
 	_expect(not store.get_debug_name().is_empty(), "get_debug_name() never returns empty")
 	store.debug_name = "Demo"
 	_expect(store.get_debug_name() == "Demo", "explicit debug_name wins")
@@ -126,7 +126,7 @@ func _test_core_additions() -> void:
 		"is_phase_allowed() distinguishes a disabled phase from a disabled system")
 
 
-# --- рекордер -----------------------------------------------------------------
+# --- recorder ------------------------------------------------------------
 
 func _test_recorder_basics() -> void:
 	var harness := _build_harness()
@@ -163,7 +163,7 @@ func _test_recorder_ring_wrap() -> void:
 	_expect(recorder.get_frame_count() == 8, "the ring keeps exactly its capacity")
 	_expect(recorder.get_frames_seen() == 20, "frames seen keeps counting past the ring")
 
-	# От старого к новому должны идти кадры 12..19 по порядку.
+	# Oldest to newest should be frames 12..19 in order.
 	var ordered := true
 	for index in 8:
 		var slot: int = recorder.get_slot_in_order(index)
@@ -208,7 +208,7 @@ func _test_recorder_statuses() -> void:
 		"the recorder remembers which systems depend on time")
 
 
-# --- статистика ---------------------------------------------------------------
+# --- statistics --------------------------------------------------------
 
 func _test_stats_distribution() -> void:
 	var harness := _build_harness()
@@ -273,8 +273,8 @@ func _test_spike_attribution() -> void:
 	_expect(spiky_volatility > steady_volatility * 2.0,
 		"the bursty system is measurably less stable than the steady one")
 
-	# Ровная система суммарно стоит больше, но в медленные кадры не вносит ничего.
-	# Ради этого различия атрибуция и существует.
+	# The steady system costs more in total but contributes nothing to slow
+	# frames. That distinction is why attribution exists.
 	_expect(stats.get_system_excess_share(1) > stats.get_system_excess_share(0),
 		"the bursty system owns more of the slow-frame excess than the steady one")
 	_expect(stats.get_spike_contributor(0) == 1,
@@ -283,12 +283,12 @@ func _test_spike_attribution() -> void:
 	_expect(stats.get_total_excess_usec() > 0.0, "the attributed excess is non-zero")
 
 
-# --- диагностика --------------------------------------------------------------
+# --- diagnostics ------------------------------------------------------
 
 func _test_diagnostics() -> void:
 	var diagnostics := EcsDiagnostics.new()
 
-	# Заполненный мир обязан быть отмечен как критический.
+	# A full world must be flagged as critical.
 	var full_world := EcsWorld.new(4)
 	for i in 4:
 		full_world.create_entity()
@@ -298,8 +298,8 @@ func _test_diagnostics() -> void:
 	_expect(findings[0].severity == EcsDiagnostics.Finding.Severity.CRITICAL,
 		"findings are sorted worst-first")
 
-	# Очередь уничтожения, которая никогда не спорожняется: классический симптом
-	# жнеца не на своём месте.
+	# A destroy queue that is never drained: the classic symptom of a misplaced
+	# reaper.
 	var harness := _build_harness()
 	for i in 5:
 		harness.world.queue_destroy(i)
@@ -314,7 +314,7 @@ func _test_diagnostics() -> void:
 	_expect(_has_finding(findings, "Destroy queue is not being drained"),
 		"an undrained destroy queue is reported")
 
-	# Сетка, у которой ячеек несоизмеримо больше, чем объектов.
+	# A grid with disproportionately more cells than objects.
 	var sparse_grid := UniformSpatialGrid.new()
 	sparse_grid.configure(200.0, 0.0, 1.0, 64)
 	var ids := PackedInt32Array([0, 1, 2])
@@ -324,7 +324,7 @@ func _test_diagnostics() -> void:
 	_expect(_has_finding(findings, "far more cells than objects"),
 		"an over-provisioned grid is reported")
 
-	# Часы, которые не поспевают.
+	# A clock that cannot keep up.
 	var clock := SimulationClock.new()
 	clock.fixed_step = 0.01
 	clock.time_scale = 100.0
@@ -334,7 +334,7 @@ func _test_diagnostics() -> void:
 	_expect(_has_finding(findings, "Simulation cannot keep up"),
 		"a saturated clock is reported")
 
-	# Запрос, чей кэш не влучает никогда.
+	# A query whose cache never hits.
 	var query_world := EcsWorld.new(32)
 	var query_store := DemoStore.new()
 	var query_tag := EcsTagStore.new()
@@ -354,7 +354,7 @@ func _test_diagnostics() -> void:
 	for frame in 40:
 		query_harness.scheduler.execute_all(1.0 / 60.0)
 		query_recorder.capture()
-		# Текучка состава каждый кадр — это то, что не даёт кэшу влучить ни разу.
+		# Membership churn every frame is what keeps the cache from ever hitting.
 		query_tag.attach(0)
 		query.refresh()
 		query_tag.detach(0)
@@ -363,7 +363,7 @@ func _test_diagnostics() -> void:
 	_expect(_has_finding(findings, "rebuilds every frame"),
 		"a query that rebuilds every frame is reported")
 
-	# Здоровая конфигурация не должна давать критических находок.
+	# A healthy configuration must produce no critical findings.
 	var clean := EcsDiagnostics.new()
 	var clean_harness := _build_harness()
 	findings = clean.inspect(null, null, clean_harness.world)
@@ -374,7 +374,7 @@ func _test_diagnostics() -> void:
 	_expect(criticals == 0, "a healthy world produces no critical findings")
 
 
-# --- отчёт --------------------------------------------------------------------
+# --- report ----------------------------------------------------------
 
 func _test_report() -> void:
 	var harness := _build_harness()
@@ -389,12 +389,12 @@ func _test_report() -> void:
 	var text: String = EcsReport.to_text(recorder, stats, harness.world)
 	_expect(text.contains("frame cost") and text.contains("systems"),
 		"the text report contains its main sections")
-	_expect(EcsReport.to_text(null, null).contains("ничего не записано"),
+	_expect(EcsReport.to_text(null, null).contains("nothing recorded yet"),
 		"the text report degrades gracefully with no data")
 
 	var frame_text: String = EcsReport.frame_to_text(recorder, stats.get_worst_frame_slot(), stats)
 	_expect(frame_text.contains("frame #"), "a single frame renders its own breakdown")
-	_expect(EcsReport.frame_to_text(recorder, -1).contains("такого кадра нет"),
+	_expect(EcsReport.frame_to_text(recorder, -1).contains("no such frame"),
 		"an invalid slot is handled")
 
 	var data: Dictionary = EcsReport.to_dictionary(recorder, stats, harness.world)
@@ -410,7 +410,7 @@ func _test_report() -> void:
 	_expect(csv_lines[0].begins_with("frame,total_usec"), "the CSV header names its columns")
 
 
-# --- фасад --------------------------------------------------------------------
+# --- facade --------------------------------------------------------
 
 func _test_inspector_facade() -> void:
 	var harness := _build_harness()
@@ -456,7 +456,7 @@ func _test_inspector_facade() -> void:
 	_expect(telemetry.mode == EcsInspector.Mode.OFF, "detach() switches the inspector off")
 
 
-# --- вспомогательное ----------------------------------------------------------
+# --- helpers ------------------------------------------------------
 
 class Harness extends RefCounted:
 	var world: EcsWorld

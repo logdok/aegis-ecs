@@ -1,16 +1,15 @@
 class_name EcsQuery
 extends RefCounted
 
-## Необязательный материализованный кэш поверх [EcsView]. Буфер результата
-## выделяется один раз и перестраивается только тогда, когда какое-нибудь из
-## участвующих хранилищ изменило состав. Прямой цикл по хранилищу остаётся
-## самым быстрым вариантом для одной горячей системы; запрос окупается, когда
-## одно и то же пересечение читают несколько раз или когда оно меняется намного
-## реже, чем читается.
+## An optional materialized cache on top of [EcsView]. The result buffer is
+## allocated once and rebuilt only when one of the participating stores has
+## changed its membership. A direct loop over a store remains the fastest option
+## for a single hot system; a query pays off when the same intersection is read
+## several times, or when it changes far less often than it is read.
 ##
-## Сама перестройка поднимает все участвующие sparse-массивы в локальные
-## переменные до цикла и не вызывает [method EcsView.matches] вовсе, поэтому
-## стоит нескольких чтений массива на кандидата, а не вызова метода.
+## The rebuild itself lifts all participating sparse arrays into local variables
+## before the loop and does not call [method EcsView.matches] at all, so it costs
+## a few array reads per candidate rather than a method call.
 
 var count: int = 0
 
@@ -24,9 +23,9 @@ var _rebuild_count: int = 0
 var _maximum_results: int = -1
 var _truncated: bool = false
 
-# Пересобирается на каждый refresh: sparse-массивы, которые реально нужно
-# проверять. Ведущее хранилище из списка исключено — обход его плотного массива
-# уже подразумевает принадлежность к нему.
+# Rebuilt on every refresh: the sparse arrays that actually need checking. The
+# driver store is excluded from the list — walking its dense array already
+# implies membership in it.
 var _test_required: Array[PackedInt32Array] = []
 var _test_excluded: Array[PackedInt32Array] = []
 
@@ -54,7 +53,7 @@ func configure(
 	for index in _view.get_excluded_count():
 		_tracked_stores.append(_view.get_excluded_store(index))
 	if maximum_results == 0 or maximum_results < -1:
-		push_error("EcsQuery: maximum_results должен быть -1 либо положительным")
+		push_error("EcsQuery: maximum_results must be -1 or positive")
 		return false
 	_entities.resize(world.capacity if maximum_results == -1 else mini(maximum_results, world.capacity))
 	_last_versions.resize(_tracked_stores.size())
@@ -63,15 +62,17 @@ func configure(
 	return true
 
 
-## Возвращает true, если кэш был перестроен, и false, если состав не менялся.
+## Returns true if the cache was rebuilt, and false if the membership did not
+## change.
 func refresh() -> bool:
 	if not _configured:
 		return false
 	var expected_capacity: int = _world.capacity if _maximum_results == -1 \
 		else mini(_maximum_results, _world.capacity)
 	if _entities.size() != expected_capacity:
-		# reserve_capacity() и так является явным аллоцирующим барьером, поэтому
-		# подстройка запроса здесь не нарушает контракт «в кадре не аллоцируем».
+		# reserve_capacity() is already an explicit allocating barrier, so
+		# adjusting the query here does not break the "no allocation in a frame"
+		# contract.
 		_entities.resize(expected_capacity)
 	if is_current():
 		return false
@@ -85,8 +86,7 @@ func refresh() -> bool:
 	var found: int = 0
 	var truncated: bool = false
 
-	# Один раз разрешаем те sparse-массивы, которые действительно нужно
-	# проверять.
+	# Resolve, once, the sparse arrays that actually need checking.
 	var driver_index: int = _view.get_driver_required_index()
 	_test_required.clear()
 	for index in _view.get_required_count():
@@ -100,8 +100,8 @@ func refresh() -> bool:
 	var excluded_tests: int = _test_excluded.size()
 
 	if required_tests == 0 and excluded_tests == 0:
-		# Множество задаётся одним лишь ведущим хранилищем: прямое копирование
-		# его плотного массива.
+		# The set is defined by the driver store alone: a direct copy of its
+		# dense array.
 		var copied: int = mini(driver_count, limit)
 		for dense in copied:
 			out[dense] = candidates[dense]
@@ -191,9 +191,8 @@ func entity_at(index: int) -> int:
 	return _entities[index]
 
 
-## Быстрый небезопасный путь: считайте возвращённый буфер только читаемым и не
-## сохраняйте псевдоним через refresh()/reserve_capacity(). Действительный
-## префикс — [0, count).
+## The fast, unsafe path: treat the returned buffer as read-only and do not keep
+## an alias across refresh()/reserve_capacity(). The valid prefix is [0, count).
 func get_entities_unsafe() -> PackedInt32Array:
 	return _entities
 
@@ -210,8 +209,8 @@ func is_truncated() -> bool:
 	return _truncated
 
 
-## Лежащий в основе view — для систем, которым нужны разрешённые хранилища без
-## материализации результата.
+## The underlying view — for systems that want the resolved stores without a
+## materialized result.
 func get_view() -> EcsView:
 	return _view
 

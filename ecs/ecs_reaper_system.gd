@@ -1,41 +1,42 @@
 class_name EcsReaperSystem
 extends EcsSystem
 
-## Единственная система, которая на самом деле уничтожает сущности.
+## The only system that actually destroys entities.
 ##
-## Все остальные системы только зовут [method EcsWorld.queue_destroy]; реальное
-## удаление происходит здесь, в [method EcsWorld.flush_destroy_queue]. Этот
-## класс существует ради того, чтобы самое важное правило библиотеки было тем,
-## что РЕГИСТРИРУЮТ, а не тем, что нужно не забыть написать:
+## Every other system merely calls [method EcsWorld.queue_destroy]; the real
+## removal happens here, in [method EcsWorld.flush_destroy_queue]. This class
+## exists so that the library's most important rule is something you REGISTER
+## rather than something you must remember to write:
 ##
 ## [codeblock]
 ## scheduler.add_system(SpawnSystem.new())
 ## scheduler.add_system(MovementSystem.new())
 ## scheduler.add_system(DamageSystem.new())
-## scheduler.add_system(EcsReaperSystem.new(world))   # всегда последней
+## scheduler.add_system(EcsReaperSystem.new(world))   # always last
 ## [/codeblock]
 ##
-## [b]Ставьте её последней, и ровно одну на конвейер.[/b] Flush посреди кадра
-## позволил бы плотному слоту, закешированному более ранней системой, указывать
-## уже на другую сущность к моменту, когда его прочитает более поздняя — это
-## use-after-free, который не падает, а тихо выдаёт неверные данные. Второй
-## жнец где-то ещё в списке ломает ту же гарантию.
+## [b]Put it last, and exactly one per pipeline.[/b] A flush mid-frame would let
+## a dense slot cached by an earlier system point at a different entity by the
+## time a later system reads it — a use-after-free that does not crash but
+## silently yields wrong data. A second reaper elsewhere in the list breaks the
+## same guarantee.
 ##
-## Он намеренно НЕ объявляет [member EcsSystem.requires_time]: сущности,
-## помеченные на уничтожение перед паузой, всё равно должны быть прибраны —
-## иначе они висят в очереди и во всех хранилищах всё время, пока игра на паузе.
+## It deliberately does NOT declare [member EcsSystem.requires_time]: entities
+## marked for destruction before a pause must still be cleaned up — otherwise
+## they hang in the queue and in every store for the whole time the game is
+## paused.
 ##
-## [b]Как реагировать на смерти[/b]: включите
-## [member EcsComponentStore.track_changes] у нужных хранилищ и зарегистрируйте
-## своего читателя СРАЗУ ПОСЛЕ этой системы. К этому моменту `added_entities`
-## содержит всё, что появилось за кадр, а `removed_entities` — всё, что за кадр
-## погибло; закончив, вызовите [method EcsWorld.clear_change_logs].
+## [b]How to react to deaths[/b]: enable
+## [member EcsComponentStore.track_changes] on the stores you care about and
+## register your reader IMMEDIATELY AFTER this system. By then `added_entities`
+## holds everything that appeared this frame and `removed_entities` holds
+## everything that died; when done, call [method EcsWorld.clear_change_logs].
 
-## Сколько сущностей уничтожено за последний [method execute]. Удобно для
-## телеметрии и для запуска эффектов или звуков смерти.
+## How many entities were destroyed in the last [method execute]. Handy for
+## telemetry and for triggering death effects or sounds.
 var last_reaped: int = 0
 
-## Сколько сущностей уничтожено всего с момента создания системы.
+## How many entities have been destroyed in total since the system was created.
 var total_reaped: int = 0
 
 var _world: EcsWorld
@@ -48,16 +49,16 @@ func _init(world: EcsWorld = null, system_display_name: String = "Reaper") -> vo
 	_world = world
 
 
-## Обычно мир передают в [method _init]. Это переопределение дополнительно
-## принимает его из объекта-контекста, у которого есть свойство `world`, — так
-## работают оба стиля сборки.
+## The world is usually passed to [method _init]. This override also accepts it
+## from a context object that has a `world` property — so both assembly styles
+## work.
 func setup(world: EcsWorld, context) -> void:
 	if _world == null:
 		_world = world
 	if _world == null and context != null and context.get(&"world") != null:
 		_world = context.get(&"world")
 	if _world == null:
-		push_error("EcsReaperSystem: нет мира — передайте его в _init() или в setup()")
+		push_error("EcsReaperSystem: no world — pass it to _init() or setup()")
 
 
 func execute(_delta: float) -> void:

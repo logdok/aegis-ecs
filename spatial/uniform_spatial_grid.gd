@@ -1,65 +1,62 @@
 class_name UniformSpatialGrid
 extends RefCounted
 
-## Равномерная 3D-сетка широкой фазы (broadphase) на основе counting sort
-## поверх Packed-массивов.
+## A uniform 3D broadphase grid built on counting sort over Packed arrays.
 ##
-## «Broadphase» отвечает на вопрос «какие объекты находятся рядом с точкой X»,
-## не перебирая все объекты (полный перебор — это O(n) на запрос и O(n²)
-## суммарно, если запросов тоже n; недопустимо уже на паре тысяч объектов, а тем
-## более на десятках тысяч). Пространство режется на равные ячейки: объект
-## попадает в ячейку по своим координатам, и «кто рядом» сводится к просмотру
-## нескольких соседних ячеек вместо всего мира.
+## "Broadphase" answers the question "which objects are near point X" without
+## iterating every object (a full scan is O(n) per query and O(n²) in total if
+## there are n queries too; unacceptable already at a couple of thousand
+## objects, let alone tens of thousands). Space is cut into equal cells: an
+## object lands in a cell by its coordinates, and "who is nearby" comes down to
+## looking at a handful of neighbouring cells instead of the whole world.
 ##
-## Сетка рассчитана на сценарий «всё движется каждый кадр»: точечного
-## перемещения объекта нет, индекс целиком перестраивается вызовом
-## [method rebuild]. Когда сдвинулось почти всё, это дешевле n отдельных
-## обновлений.
+## The grid is built for the "everything moves every frame" scenario: there is no
+## single-object move; the index is rebuilt entirely by [method rebuild]. When
+## almost everything has moved, that is cheaper than n individual updates.
 ##
-## [b]ПОЧЕМУ COUNTING SORT, А НЕ Dictionary «ячейка -> список»[/b]: словарь в
-## GDScript — это хеш-таблица общего назначения с накладными расходами на каждую
-## вставку и, что хуже, с аллокациями при росте. Перестраивать такое каждый кадр
-## в бюджет не укладывается. Counting sort вместо этого перекладывает все записи
-## за ТРИ линейных прохода вообще без аллокаций (все буферы преаллоцированы в
-## [method configure]), причём все три работают с ОДНИМ И ТЕМ ЖЕ массивом
-## `_cell_offsets` — отдельного массива-курсора нет:
-##   Проход 1: вычислить ячейку каждой записи и увеличить её счётчик (гистограмма).
-##   Проход 2: превратить гистограмму во ВКЛЮЧАЮЩИЕ префиксные суммы на месте,
-##             так что _cell_offsets[c] становится индексом СРАЗУ ЗА последней
-##             записью ячейки c.
-##   Проход 3: разложить записи по итоговым слотам, идя ОТ КОНЦА К НАЧАЛУ и
-##             уменьшая _cell_offsets[cell] перед каждой записью. Побочный
-##             эффект — ровно то, что нужно дальше: к концу прохода каждый
-##             _cell_offsets[c] уменьшен ровно на размер своей ячейки и снова
-##             указывает на её НАЧАЛО.
-## Результат — массив, отсортированный по ячейкам: всё, что в одной ячейке,
-## лежит подряд, и ни одного malloc за всю перестройку.
+## [b]WHY COUNTING SORT AND NOT A Dictionary "cell -> list"[/b]: a Dictionary in
+## GDScript is a general-purpose hash table with per-insert overhead and, worse,
+## allocations when it grows. Rebuilding one every frame does not fit the budget.
+## Counting sort instead reshuffles all entries in THREE linear passes with no
+## allocation at all (every buffer is pre-allocated in [method configure]), and
+## all three work on THE SAME `_cell_offsets` array — there is no separate cursor
+## array:
+##   Pass 1: compute each entry's cell and increment its counter (a histogram).
+##   Pass 2: turn the histogram into INCLUSIVE prefix sums in place, so that
+##           _cell_offsets[c] becomes the index JUST PAST cell c's last entry.
+##   Pass 3: scatter the entries into their final slots, walking FROM END TO
+##           START and decrementing _cell_offsets[cell] before each write. The
+##           side effect is exactly what is needed next: by the end of the pass
+##           every _cell_offsets[c] has been decremented by exactly its cell's
+##           size and points at the cell's START again.
+## The result is an array sorted by cell: everything in one cell is contiguous,
+## and not a single malloc over the whole rebuild.
 ##
-## ПОЧЕМУ В ПРОХОДЕ 3 ИДЁМ НАЗАД: это классический приём counting sort, который
-## позволяет одному массиву делать работу двух (гистограмма плюс курсор записи).
-## Экономия не только в памяти (40 КБ на сетке в 10 000 ячеек), но и в скорости:
-## горячий цикл трогает один массив вместо двух, то есть вдвое меньше кэш-линий.
-## При этом сортировка остаётся УСТОЙЧИВОЙ.
+## WHY PASS 3 GOES BACKWARDS: it is the classic counting-sort trick that lets one
+## array do the work of two (the histogram plus the write cursor). The saving is
+## not only memory (40 KB on a 10,000-cell grid) but also speed: the hot loop
+## touches one array instead of two, that is half as many cache lines. The sort
+## also stays STABLE.
 ##
-## [b]ЦЕНА ПЕРЕСТРОЙКИ — O(записи + ЯЧЕЙКИ)[/b], а не только O(записи): проходы
-## 1 и 3 линейны по числу записей, но проход 2 обязан пройти по КАЖДОЙ ячейке,
-## включая пустые. Именно поэтому [param cell_size] так важен: сетка из 10 000
-## ячеек, в которой живёт 30 объектов, тратит почти всё время на пустоту.
-## Держите [method get_cell_count] соразмерным ожидаемому числу объектов или
-## вызовите [method suggest_cell_size] и пусть арифметику сделает он.
+## [b]THE REBUILD COST IS O(entries + CELLS)[/b], not just O(entries): passes 1
+## and 3 are linear in the number of entries, but pass 2 must walk EVERY cell,
+## empty ones included. That is exactly why [param cell_size] matters so much: a
+## grid of 10,000 cells with 30 objects living in it spends almost all its time
+## on emptiness. Keep [method get_cell_count] comparable to the expected number
+## of objects, or call [method suggest_cell_size] and let it do the arithmetic.
 ##
-## [b]ПЛОСКИЙ (2D) РЕЖИМ[/b]: передайте `vertical_extent = 0.0`, и сетка
-## схлопнется в один слой, сократив число ячеек — а вместе с ним и постоянную
-## часть каждой перестройки — во столько раз, сколько вертикальных слоёв было бы
-## иначе. Для игры сверху вниз, RTS, bullet hell или чего угодно на плоскости
-## это бесплатная скорость; см. [method configure].
+## [b]FLAT (2D) MODE[/b]: pass `vertical_extent = 0.0` and the grid collapses
+## into a single layer, cutting the cell count — and with it the constant part of
+## every rebuild — by as many times as there would otherwise be vertical layers.
+## For a top-down game, an RTS, bullet hell or anything on a plane, that is a
+## free speed-up; see [method configure].
 ##
-## РАСКЛАДКА ИНДЕКСОВ ЯЧЕЕК подобрана так, чтобы весь X-диапазон одной строки был
-## НЕПРЕРЫВЕН в отсортированном массиве (cell = (cy*dim_z + cz)*dim_x + cx).
-## Поэтому запрос по сфере читает одну плоскую полосу на строку, а не дёргает
-## каждую ячейку отдельно — меньше промахов кэша и меньше обращений к массиву.
+## THE CELL INDEX LAYOUT is chosen so that the whole X range of one row is
+## CONTIGUOUS in the sorted array (cell = (cy*dim_z + cz)*dim_x + cx). So a
+## sphere query reads one flat strip per row instead of poking at each cell
+## individually — fewer cache misses and fewer array accesses.
 
-## Верхняя граница на то, сколько id может вернуть один вызов query_sphere().
+## An upper bound on how many ids one query_sphere() call can return.
 const MAX_QUERY_RESULTS: int = 2048
 
 var _cell_size: float = 1.0
@@ -71,52 +68,50 @@ var _cell_count: int = 0
 var _origin_xz: float = 0.0
 var _flat: bool = false
 
-## Размер — _cell_count + 1. По ходу [method rebuild] массив последовательно
-## играет три роли: гистограмма -> «концы» ячеек -> «начала» ячеек. К моменту
-## возврата из rebuild это всегда «начала»: _cell_offsets[c] — индекс первой
-## записи ячейки c, а _cell_offsets[c + 1] — индекс сразу за её последней.
+## Its size is _cell_count + 1. Over the course of [method rebuild] the array
+## plays three roles in turn: histogram -> cell "ends" -> cell "starts". By the
+## time rebuild returns it is always "starts": _cell_offsets[c] is the index of
+## cell c's first entry, and _cell_offsets[c + 1] the index just past its last.
 var _cell_offsets: PackedInt32Array = PackedInt32Array()
 
 var _scratch_cells: PackedInt32Array = PackedInt32Array()
 var _entry_count: int = 0
 
-## Записи, отсортированные по ячейкам. Снаружи только для чтения — так же, как
-## публичные поля [EcsComponentStore]: открыты, чтобы система могла написать
-## собственный обход (все пары внутри ячейки, нестандартная форма, k ближайших)
-## без лишнего копирования. Действительный префикс — [0, get_entry_count()).
+## Entries sorted by cell. Read-only from outside — the same as [EcsComponentStore]'s
+## public fields: exposed so a system can write its own traversal (all pairs
+## within a cell, a non-standard region shape, k nearest) without extra copying.
+## The valid prefix is [0, get_entry_count()).
 var sorted_entities: PackedInt32Array = PackedInt32Array()
 var sorted_points: PackedVector3Array = PackedVector3Array()
 
-## Результат последнего [method query_sphere]. Снаружи только для чтения и
-## ПЕРЕЗАПИСЫВАЕТСЯ следующим запросом.
+## The result of the last [method query_sphere]. Read-only from outside and
+## OVERWRITTEN by the next query.
 var query_buffer: PackedInt32Array = PackedInt32Array()
 
-## Позиции, соответствующие [member query_buffer]; заполняются, только пока
-## [member store_query_points] равно true.
+## The positions matching [member query_buffer]; filled only while
+## [member store_query_points] is true.
 var query_point_buffer: PackedVector3Array = PackedVector3Array()
 
-## Заставляет [method query_sphere] заполнять ещё и [member query_point_buffer].
-## По умолчанию выключено, чтобы те, кому нужны только id, не платили за лишнюю
-## запись; включённое — экономит вызывающему коду поиск через sparse плюс чтение
-## массива на каждое попадание, а это типичная форма цикла стайного поведения
-## или расталкивания.
+## Makes [method query_sphere] also fill [member query_point_buffer]. Off by
+## default so that callers who only need ids do not pay for the extra write;
+## enabled, it saves the caller a sparse lookup plus an array read per hit, which
+## is the typical shape of a flocking or push-apart loop.
 var store_query_points: bool = false
 
 
-## [param arena_radius] задаёт границу по плоскости XZ (арена — квадрат или круг
-## вокруг начала координат), [param vertical_extent] — границу по Y вверх от
-## нуля. Всё, что выходит за эти границы, не теряется и не вызывает ошибку — оно
-## зажимается в краевые ячейки, поэтому запросы у границы арены остаются
-## корректными.
+## [param arena_radius] sets the bound on the XZ plane (the arena is a square or
+## circle around the origin), [param vertical_extent] the bound on Y upward from
+## zero. Anything outside these bounds is not lost and does not raise an error —
+## it is clamped into the edge cells, so queries near the arena boundary stay
+## correct.
 ##
-## [b]Для плоского мира передайте `vertical_extent = 0.0`[/b], и сетка будет
-## использовать один слой по Y. Координата Y тогда игнорируется при раскладке по
-## ячейкам (проверки расстояния по-прежнему полностью трёхмерные) — это ровно то
-## что нужно игре на плоскости, и это убирает вертикальный множитель из числа
-## ячеек.
+## [b]For a flat world, pass `vertical_extent = 0.0`[/b] and the grid uses a
+## single Y layer. The Y coordinate is then ignored when bucketing into cells
+## (distance checks stay fully three-dimensional) — which is exactly what a game
+## on a plane needs, and it removes the vertical multiplier from the cell count.
 ##
-## [param entry_capacity] — наибольшее число записей, которое когда-либо получит
-## один [method rebuild]; буферы рассчитываются под него один раз здесь.
+## [param entry_capacity] is the largest number of entries a single
+## [method rebuild] will ever receive; the buffers are sized for it once here.
 func configure(arena_radius: float, vertical_extent: float, cell_size: float, entry_capacity: int) -> void:
 	_cell_size = maxf(cell_size, 0.01)
 	_inv_cell_size = 1.0 / _cell_size
@@ -136,18 +131,17 @@ func configure(arena_radius: float, vertical_extent: float, cell_size: float, en
 	_entry_count = 0
 
 
-## Предлагает [param cell_size] для [method configure].
+## Suggests a [param cell_size] for [method configure].
 ##
-## Две силы тянут в разные стороны: мелкие ячейки делают перестройку дорогой
-## (проход 2 идёт по всем ячейкам), но запросы дешёвыми; крупные делают
-## перестройку почти бесплатной, но запросы дорогими (больше далёких кандидатов
-## приходится проверять по расстоянию). Точка равновесия — примерно «одна ячейка
-## на ожидаемый объект», с нижней границей около двойного типичного радиуса
-## запроса, чтобы запрос всё ещё читал лишь несколько ячеек.
+## Two forces pull in opposite directions: small cells make the rebuild
+## expensive (pass 2 walks every cell) but queries cheap; large cells make the
+## rebuild almost free but queries expensive (more distant candidates to
+## distance-check). The equilibrium is roughly "one cell per expected object",
+## with a lower bound of about twice the typical query radius so a query still
+## reads only a few cells.
 ##
-## Для плоской сетки передайте `vertical_extent = 0.0`, как и в
-## [method configure]. Результат — отправная точка, а не закон: профилируйте и
-## корректируйте.
+## For a flat grid, pass `vertical_extent = 0.0`, as in [method configure]. The
+## result is a starting point, not a law: profile and adjust.
 static func suggest_cell_size(
 	arena_radius: float,
 	vertical_extent: float,
@@ -158,28 +152,28 @@ static func suggest_cell_size(
 	var entries: float = float(maxi(expected_entries, 1))
 	var density_size: float
 	if vertical_extent <= 0.0:
-		# (span / c)^2 == записи
+		# (span / c)^2 == entries
 		density_size = span / sqrt(entries)
 	else:
-		# (span / c)^2 * (vertical_extent / c) == записи
+		# (span / c)^2 * (vertical_extent / c) == entries
 		density_size = pow(span * span * maxf(vertical_extent, 0.01) / entries, 1.0 / 3.0)
 	return maxf(density_size, maxf(typical_query_radius, 0.01) * 2.0)
 
 
-## Полностью перестраивает индекс из плоской пары массивов «id сущности,
-## точка». Оба обязаны содержать не менее [param entry_count] действительных
-## элементов — это позволяет вызывающей системе держать переиспользуемые буферы
-## с запасом и передавать только заполненную часть, ничего не обрезая.
+## Fully rebuilds the index from a flat pair of "entity id, point" arrays. Both
+## must hold at least [param entry_count] valid elements — this lets the calling
+## system keep reusable buffers with spare room and pass only the filled part,
+## trimming nothing.
 func rebuild(entity_ids: PackedInt32Array, points: PackedVector3Array, entry_count: int) -> void:
-	# Защита от переполнения преаллоцированных буферов: сетка физически не может
-	# принять больше записей, чем было заявлено в configure(). Молча взять первые
-	# entry_capacity лучше, чем выйти за границу массива.
+	# Guard against overflowing the pre-allocated buffers: the grid physically
+	# cannot take more entries than configure() was told about. Silently taking
+	# the first entry_capacity is better than going out of bounds.
 	entry_count = clampi(entry_count, 0, _scratch_cells.size())
 	_entry_count = entry_count
 	_cell_offsets.fill(0)
 	if entry_count <= 0:
-		# Все смещения нулевые, поэтому любая полоса [start, end) пуста, и запросы
-		# корректно ничего не находят даже без раннего выхода.
+		# All offsets are zero, so any strip [start, end) is empty and queries
+		# correctly find nothing even without an early return.
 		return
 
 	var last_x: int = _dim_x - 1
@@ -191,7 +185,7 @@ func rebuild(entity_ids: PackedInt32Array, points: PackedVector3Array, entry_cou
 	var dim_x: int = _dim_x
 	var dim_z: int = _dim_z
 
-	# Проход 1 — определить ячейку каждой записи и построить гистограмму в _cell_offsets.
+	# Pass 1 -- determine each entry's cell and build a histogram in _cell_offsets.
 	if _flat:
 		for i in entry_count:
 			var p: Vector3 = points[i]
@@ -211,21 +205,21 @@ func rebuild(entity_ids: PackedInt32Array, points: PackedVector3Array, entry_cou
 			cells[i] = cell
 			offsets[cell] += 1
 
-	# Проход 2 — превратить гистограмму во ВКЛЮЧАЮЩИЕ префиксные суммы на месте,
-	# так что _cell_offsets[c] — индекс сразу за последней записью ячейки c.
-	# Последний элемент (индекс _cell_count) — общее число записей: он служит
-	# «концом» последней ячейки и в проходе 3 не меняется, так как ни одна запись
-	# эту ячейку не адресует.
+	# Pass 2 -- turn the histogram into INCLUSIVE prefix sums in place, so that
+	# _cell_offsets[c] is the index just past cell c's last entry. The last
+	# element (index _cell_count) is the total entry count: it serves as the
+	# "end" of the last cell and is not changed in pass 3, since no entry
+	# addresses that cell.
 	var running: int = 0
 	for c in _cell_count:
 		running += offsets[c]
 		offsets[c] = running
 	offsets[_cell_count] = running
 
-	# Проход 3 — раскладываем записи, идя ОТ КОНЦА К НАЧАЛУ и уменьшая «конец»
-	# каждой ячейки перед каждой записью. После прохода каждый _cell_offsets[c]
-	# уменьшен ровно на размер своей ячейки, то есть снова указывает на её начало —
-	# отдельный массив-курсор не нужен.
+	# Pass 3 -- scatter the entries, walking FROM END TO START and decrementing
+	# each cell's "end" before each write. After the pass every _cell_offsets[c]
+	# has been decremented by exactly its cell's size, that is, points at its
+	# start again -- no separate cursor array needed.
 	var out_entities: PackedInt32Array = sorted_entities
 	var out_points: PackedVector3Array = sorted_points
 	var i: int = entry_count
@@ -238,14 +232,12 @@ func rebuild(entity_ids: PackedInt32Array, points: PackedVector3Array, entry_cou
 		out_points[slot] = points[i]
 
 
-## Возвращает id ближайшей проиндексированной сущности в радиусе
-## [param radius], либо -1. Ничего не аллоцирует — именно это делает безопасным
-## широкий радиус поиска: его расширение стоит процессорного времени, но никогда
-## не памяти.
+## Returns the id of the nearest indexed entity within [param radius], or -1.
+## Allocates nothing — that is what makes a wide search radius safe: widening it
+## costs CPU time but never memory.
 ##
-## Как и query_sphere ниже, сначала вычисляет ограничивающий ячейками
-## параллелепипед вокруг сферы и обходит только ячейки внутри него, а не всю
-## сетку.
+## Like query_sphere below, it first computes a cell-bounding box around the
+## sphere and walks only the cells inside it, not the whole grid.
 func query_nearest(center: Vector3, radius: float) -> int:
 	if _entry_count <= 0:
 		return -1
@@ -265,9 +257,9 @@ func query_nearest(center: Vector3, radius: float) -> int:
 
 	for cy in range(min_y, max_y + 1):
 		for cz in range(min_z, max_z + 1):
-			# Благодаря раскладке (cy*dim_z + cz)*dim_x + cx весь X-диапазон одной строки
-			# лежит подряд, поэтому здесь читается одна плоская полоса [start, end), а не
-			# dim_x отдельных ячеек.
+			# Thanks to the (cy*dim_z + cz)*dim_x + cx layout, the whole X range
+			# of one row is contiguous, so this reads one flat strip
+			# [start, end) rather than dim_x separate cells.
 			var row_base: int = (cy * _dim_z + cz) * _dim_x
 			var slice_start: int = offsets[row_base + min_x]
 			var slice_end: int = offsets[row_base + max_x + 1]
@@ -279,23 +271,24 @@ func query_nearest(center: Vector3, radius: float) -> int:
 	return best_entity
 
 
-## Заполняет [member query_buffer] всеми проиндексированными сущностями в
-## радиусе [param radius] и возвращает, сколько id записано (не больше
-## [param result_limit] и не больше собственного размера буфера).
+## Fills [member query_buffer] with every indexed entity within [param radius]
+## and returns how many ids were written (no more than [param result_limit] and
+## no more than the buffer's own size).
 ##
-## [b]Результат намеренно попадает в поле, а не в выходной параметр.[/b] Тогда
-## владение и время жизни результата очевидны, а возврат нового массива
-## аллоцировал бы на каждый запрос. Внутренний буфер переиспользуется, поэтому
-## установившийся запрос не аллоцирует ничего.
+## [b]The result deliberately goes into a field, not an out parameter.[/b] That
+## makes the ownership and lifetime of the result obvious, and returning a new
+## array would allocate on every query. The internal buffer is reused, so a
+## steady-state query allocates nothing.
 ##
-## Выставьте [member store_query_points], чтобы получить ещё и соответствующие
-## позиции в [member query_point_buffer].
+## Set [member store_query_points] to also get the matching positions in
+## [member query_point_buffer].
 ##
-## [b]Внимание:[/b] оба буфера перезаписываются следующим запросом. Читайте их
-## до следующего запроса либо копируйте нужное.
+## [b]Note:[/b] both buffers are overwritten by the next query. Read them before
+## the next query, or copy what you need.
 ##
-## При достижении лимита просмотр прекращается, поэтому обрезанный результат
-## смещён к нижнему углу области поиска, а не является случайной выборкой.
+## When the limit is reached the scan stops, so a truncated result is biased
+## toward the lower corner of the search region rather than being a random
+## sample.
 func query_sphere(center: Vector3, radius: float, result_limit: int) -> int:
 	if _entry_count <= 0:
 		return 0
@@ -325,9 +318,10 @@ func query_sphere(center: Vector3, radius: float, result_limit: int) -> int:
 			var slice_start: int = offsets[row_base + min_x]
 			var slice_end: int = offsets[row_base + max_x + 1]
 			for s in range(slice_start, slice_end):
-				# Диапазон ячеек — это лишь ограничивающий параллелепипед сферы, а не сама
-				# сфера, поэтому каждая точка полосы всё равно проверяется точным расстоянием:
-				# иначе в результат попали бы угловые точки дальше radius.
+				# The cell range is only the sphere's bounding box, not the
+				# sphere itself, so every point in the strip is still checked by
+				# exact distance: otherwise corner points farther than radius
+				# would end up in the result.
 				var point: Vector3 = points[s]
 				if point.distance_squared_to(center) > radius_sq:
 					continue
@@ -340,9 +334,10 @@ func query_sphere(center: Vector3, radius: float, result_limit: int) -> int:
 	return written
 
 
-## Индекс ячейки, содержащей [param point], либо -1, если сетка не настроена.
-## В связке с [method get_cell_start] / [method get_cell_end] позволяет написать
-## собственный обход по [member sorted_entities] и [member sorted_points].
+## The index of the cell containing [param point], or -1 if the grid is not
+## configured. Together with [method get_cell_start] / [method get_cell_end] it
+## lets you write your own traversal over [member sorted_entities] and
+## [member sorted_points].
 func get_cell_index(point: Vector3) -> int:
 	if _cell_count <= 0:
 		return -1
@@ -354,12 +349,12 @@ func get_cell_index(point: Vector3) -> int:
 	return (cy * _dim_z + cz) * _dim_x + cx
 
 
-## Первый индекс ячейки [param cell] в отсортированных массивах.
+## The first index of cell [param cell] in the sorted arrays.
 func get_cell_start(cell: int) -> int:
 	return _cell_offsets[cell]
 
 
-## Индекс сразу за последним элементом ячейки [param cell].
+## The index just past the last element of cell [param cell].
 func get_cell_end(cell: int) -> int:
 	return _cell_offsets[cell + 1]
 
@@ -376,7 +371,7 @@ func get_cell_size() -> float:
 	return _cell_size
 
 
-## Число ячеек по осям, как (x, y, z). В плоском режиме y равен 1.
+## The number of cells per axis, as (x, y, z). In flat mode y is 1.
 func get_dimensions() -> Vector3i:
 	return Vector3i(_dim_x, _dim_y, _dim_z)
 

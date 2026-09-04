@@ -1,45 +1,45 @@
 class_name EcsFrameRecorder
 extends RefCounted
 
-## Записывает, во что обошёлся каждый кадр, в разрезе по системам, в кольцевой
-## буфер фиксированного размера.
+## Records what each frame cost, broken down by system, into a fixed-size ring
+## buffer.
 ##
-## [b]Это и есть самая полезная часть.[/b] Живой показ текущего кадра мельтешит
-## слишком быстро, чтобы его читать, и показывает тот кадр, на который вы
-## случайно посмотрели; интересный кадр почти всегда уже прошёл. Хранение окна
-## истории превращает «цифры скачут» в «вот кадр, который стоил втрое больше
-## медианы, и вот на что он потратил лишнее».
+## [b]This is the most useful part.[/b] A live view of the current frame flickers
+## too fast to read, and shows whichever frame you happened to look at; the
+## interesting frame is almost always already gone. Keeping a window of history
+## turns "the numbers jump" into "here is the frame that cost three times the
+## median, and here is what it spent the extra on".
 ##
-## Не содержит нод и никогда не трогает дерево сцены, поэтому работает headless —
-## в CI, в QA-сборке или по команде из консоли — с интерфейсом и без него. После
-## [method configure] не выполняет ни одной аллокации, поэтому его не жалко
-## оставить включённым в релизной сборке.
+## It contains no nodes and never touches the scene tree, so it works headless —
+## in CI, in a QA build or from a console command — with an interface and
+## without. After [method configure] it performs no allocation, so there is no
+## reason not to leave it enabled in a release build.
 ##
 ## [codeblock]
 ## var recorder := EcsFrameRecorder.new()
-## recorder.configure(scheduler, world)          # один раз
+## recorder.configure(scheduler, world)          # once
 ##
 ## func _process(delta: float) -> void:
 ##     scheduler.execute_all(delta)
-##     recorder.capture()                        # последней строкой кадра
+##     recorder.capture()                        # as the last line of the frame
 ## [/codeblock]
 ##
-## Читать окно обратно — через [EcsFrameStats] (агрегаты, атрибуция всплесков)
-## или [EcsReport] (текст/JSON). См. также [EcsInspector], который связывает всё
-## это одним вызовом.
+## Read the window back through [EcsFrameStats] (aggregates, spike attribution)
+## or [EcsReport] (text/JSON). See also [EcsInspector], which wires all of it up
+## in one call.
 
-## Сколько кадров хранится по умолчанию: 4 секунды при 60 Гц — достаточно, чтобы
-## в окно попал рывок, и всё ещё дёшево (240 кадров x 20 систем x 4 байта ~ 19 КБ).
+## How many frames are kept by default: 4 seconds at 60 Hz — enough for a spike
+## to land in the window, and still cheap (240 frames x 20 systems x 4 bytes ~ 19 KB).
 const DEFAULT_FRAME_CAPACITY: int = 240
 
-## Что произошло с системой за один кадр.
+## What happened to a system during one frame.
 enum Status {
 	EXECUTED = 0,
-	## Пропущена, потому что система объявила `requires_time`, а шаг был нулевым.
+	## Skipped because the system declared `requires_time` and the step was zero.
 	SKIPPED_PAUSED = 1,
-	## Пропущена, потому что выключена сама система.
+	## Skipped because the system itself is disabled.
 	DISABLED = 2,
-	## Пропущена, потому что выключена вся её фаза.
+	## Skipped because its whole phase is disabled.
 	PHASE_OFF = 3,
 }
 
@@ -52,7 +52,7 @@ var _names: PackedStringArray = PackedStringArray()
 var _phases: PackedInt32Array = PackedInt32Array()
 var _requires_time: PackedByteArray = PackedByteArray()
 
-# Кольцевые буферы. Посистемные — плоские: индекс = slot * system_count + i.
+# Ring buffers. The per-system ones are flat: index = slot * system_count + i.
 var _timings: PackedFloat32Array = PackedFloat32Array()
 var _status: PackedByteArray = PackedByteArray()
 var _frame_total: PackedFloat32Array = PackedFloat32Array()
@@ -70,17 +70,17 @@ var _frames_seen: int = 0
 var _last_structural: int = 0
 var _configured: bool = false
 
-## Сколько занял последний [method capture], в микросекундах. Наблюдатель,
-## измеряющий сам себя: если эта величина станет заметной на фоне кадра, значит
-## окно слишком велико или capture вызывается слишком часто.
+## How long the last [method capture] took, in microseconds. An observer that
+## measures itself: if this value becomes noticeable against the frame, the
+## window is too large or capture is being called too often.
 var last_capture_usec: float = 0.0
 
 
-## Привязывается к конвейеру и преаллоцирует все буферы. Вызывается один раз,
-## после [method EcsScheduler.setup_all].
+## Binds to the pipeline and pre-allocates every buffer. Call it once, after
+## [method EcsScheduler.setup_all].
 func configure(scheduler: EcsScheduler, world: EcsWorld, frames: int = DEFAULT_FRAME_CAPACITY) -> bool:
 	if scheduler == null or world == null:
-		push_error("EcsFrameRecorder: нужны и планировщик, и мир")
+		push_error("EcsFrameRecorder: both a scheduler and a world are required")
 		return false
 	_scheduler = scheduler
 	_world = world
@@ -115,19 +115,19 @@ func configure(scheduler: EcsScheduler, world: EcsWorld, frames: int = DEFAULT_F
 	return true
 
 
-## Записывает только что закончившийся кадр. Вызывайте последним действием
-## кадра, после того как отработали все фазы.
+## Records the frame that just finished. Call it as the last action of the
+## frame, after every phase has run.
 ##
-## [param substeps] — сколько раз за этот кадр выполнилась фаза симуляции;
-## передавайте [method SimulationClock.get_last_substeps] при фиксированном
-## шаге, иначе оставьте 1. Замеры планировщика накапливаются между вызовами
-## `begin_frame()`, поэтому без этого числа кадр с фиксированным шагом выглядит
-## в N раз дороже на систему, чем он есть.
+## [param substeps] is how many times the simulation phase ran this frame; pass
+## [method SimulationClock.get_last_substeps] with a fixed step, otherwise leave
+## it 1. The scheduler's measurements accumulate between `begin_frame()` calls,
+## so without this number a fixed-step frame looks N times more expensive per
+## system than it is.
 ##
-## [param wall_frame_usec] — длительность всего отрисованного кадра, если она
-## известна. Разница между ней и записанной суммой ECS — это всё, что вне
-## планировщика: рендер, физика, прочие скрипты. Ровно то разделение, которое
-## нужно, чтобы понять, чья это проблема, когда кадр просел.
+## [param wall_frame_usec] is the duration of the whole rendered frame, if it is
+## known. The difference between it and the recorded ECS total is everything
+## outside the scheduler: rendering, physics, other scripts. Exactly the split
+## needed to work out whose problem it is when a frame dips.
 func capture(substeps: int = 1, wall_frame_usec: float = 0.0) -> void:
 	if not _configured:
 		return
@@ -171,8 +171,8 @@ func capture(substeps: int = 1, wall_frame_usec: float = 0.0) -> void:
 	last_capture_usec = float(Time.get_ticks_usec() - started)
 
 
-## Забывает окно без переаллокации. Используйте после перезапуска уровня, чтобы
-## кадры прошлого забега не искажали статистику.
+## Forgets the window without reallocating. Use it after a level restart so
+## frames from the previous run do not distort the statistics.
 func clear() -> void:
 	_write = 0
 	_filled = 0
@@ -185,33 +185,35 @@ func is_configured() -> bool:
 	return _configured
 
 
-## Сколько кадров сейчас хранится, от 0 до [member frame_capacity].
+## How many frames are currently held, from 0 to [member frame_capacity].
 func get_frame_count() -> int:
 	return _filled
 
 
-## Сколько кадров записано всего, включая уже перезаписанные.
+## How many frames have been recorded in total, including already overwritten
+## ones.
 func get_frames_seen() -> int:
 	return _frames_seen
 
 
-## Слот кольца с самым свежим записанным кадром, либо -1, если окно пусто.
+## The ring slot with the most recently recorded frame, or -1 if the window is
+## empty.
 func get_newest_slot() -> int:
 	if _filled == 0:
 		return -1
 	return (_write - 1 + frame_capacity) % frame_capacity
 
 
-## Слот кольца с кадром [param age]-м с конца (0 — самый свежий), либо -1, если
-## этот кадр уже вытеснен.
+## The ring slot with the [param age]-th frame from the end (0 is the newest), or
+## -1 if that frame has already been evicted.
 func get_slot_from_newest(age: int) -> int:
 	if age < 0 or age >= _filled:
 		return -1
 	return (_write - 1 - age + frame_capacity) % frame_capacity
 
 
-## Слот кольца с [param index]-м по старшинству кадром — для обхода окна в
-## хронологическом порядке.
+## The ring slot with the [param index]-th oldest frame — for walking the window
+## in chronological order.
 func get_slot_in_order(index: int) -> int:
 	if index < 0 or index >= _filled:
 		return -1
@@ -219,7 +221,7 @@ func get_slot_in_order(index: int) -> int:
 	return (oldest + index) % frame_capacity
 
 
-# --- чтение покадровых величин -------------------------------------------------
+# --- reading per-frame values -----------------------------------------------
 
 func get_frame_total_usec(slot: int) -> float:
 	return _frame_total[slot]
@@ -245,18 +247,18 @@ func get_frame_world_capacity(slot: int) -> int:
 	return _frame_capacity_at[slot]
 
 
-## Насколько за этот кадр продвинулся `world.structural_version` — дешёвая мера
-## того, сколько реально было создания, уничтожения и присоединения компонентов.
+## How far `world.structural_version` advanced this frame — a cheap measure of
+## how much creation, destruction and component attachment there actually was.
 func get_frame_structural_delta(slot: int) -> int:
 	return _frame_structural[slot]
 
 
-## Монотонный номер кадра, устойчивый даже после переиспользования слота.
+## A monotonic frame number, stable even after a slot is reused.
 func get_frame_id(slot: int) -> int:
 	return _frame_id[slot]
 
 
-# --- чтение посистемных величин ------------------------------------------------
+# --- reading per-system values ---------------------------------------------
 
 func get_system_name(index: int) -> String:
 	return _names[index]
@@ -278,31 +280,30 @@ func get_status(slot: int, system_index: int) -> int:
 	return _status[slot * system_count + system_index]
 
 
-## Плоский буфер замеров — для потребителя, который хочет обойти окно без
-## вызова метода на каждую ячейку. Индексируется как
-## `slot * system_count + system_index`. Только для чтения.
+## The flat timings buffer — for a consumer that wants to walk the window
+## without a method call per cell. Indexed as `slot * system_count + system_index`.
+## Read-only.
 ##
-## [EcsFrameStats] использует именно его, а не [method get_timing_usec]: на
-## нескольких тысячах ячеек вызов метода перевешивает всё остальное, что делает
-## анализ.
+## [EcsFrameStats] uses this rather than [method get_timing_usec]: over a few
+## thousand cells, the method call outweighs everything else the analysis does.
 func get_timings_unsafe() -> PackedFloat32Array:
 	return _timings
 
 
-## Плоский буфер статусов, индексируется так же, как [method get_timings_unsafe]. Только для чтения.
+## The flat status buffer, indexed the same way as [method get_timings_unsafe]. Read-only.
 func get_status_unsafe() -> PackedByteArray:
 	return _status
 
 
-## Слот кольца с самым старым хранимым кадром, либо -1, если окно пусто. С ним
-## потребитель может обойти окно арифметически, не вызывая
-## [method get_slot_in_order] на каждый кадр.
+## The ring slot with the oldest held frame, or -1 if the window is empty. With
+## it a consumer can walk the window arithmetically, without calling
+## [method get_slot_in_order] per frame.
 func get_oldest_slot() -> int:
 	if _filled == 0:
 		return -1
 	return (_write - _filled + frame_capacity) % frame_capacity
 
 
-## Оценка памяти, занятой кольцевым буфером, в байтах.
+## An estimate of the memory used by the ring buffer, in bytes.
 func get_memory_usage() -> int:
 	return _timings.size() * 4 + _status.size() + frame_capacity * 30

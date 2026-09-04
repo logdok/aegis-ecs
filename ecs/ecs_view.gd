@@ -1,18 +1,16 @@
 class_name EcsView
 extends RefCounted
 
-## Нематериализованное пересечение хранилищ без единой аллокации.
+## A non-materialized store intersection with no allocation at all.
 ##
-## [method configure] — холодная операция. Каждый кадр [method refresh_driver]
-## выбирает наименьшую из обязательных sparse-множеств, а [method matches]
-## выполняет прямые проверки принадлежности, не строя ни итератора, ни массива
-## результата.
+## [method configure] is a cold operation. Each frame [method refresh_driver]
+## picks the smallest of the required sparse sets, and [method matches] runs
+## direct membership checks without building an iterator or a result array.
 ##
-## [b]В самых горячих системах [method matches] лучше не использовать вовсе.[/b]
-## Это вызов метода на каждого кандидата, а на десятках тысяч сущностей именно
-## он и оказывается основной стоимостью. Возьмите у view РАЗРЕШЁННЫЕ хранилища
-## один раз, поднимите их sparse-массивы в локальные переменные и встройте
-## проверку в свой цикл:
+## [b]In the hottest systems it is better not to use [method matches] at all.[/b]
+## It is a method call per candidate, and at tens of thousands of entities that
+## is the main cost. Take the RESOLVED stores from the view once, lift their
+## sparse arrays into local variables and inline the check into your own loop:
 ## [codeblock]
 ## view.refresh_driver()
 ## var driver := view.get_candidate_store()
@@ -49,29 +47,29 @@ func configure(
 	_world = world
 	_owner_system = owner_system
 	if world == null or required_types.is_empty():
-		push_error("EcsView: обязательны мир и хотя бы один required-тип")
+		push_error("EcsView: a world and at least one required type are mandatory")
 		return false
 
 	for type_id in required_types:
 		if not world.has_store(type_id):
-			push_error("EcsView: required-тип %d не зарегистрирован" % type_id)
+			push_error("EcsView: required type %d is not registered" % type_id)
 			return false
 		var store: EcsComponentStore = world.get_store(type_id)
 		if _required.has(store):
-			push_error("EcsView: required-тип %d указан дважды" % type_id)
+			push_error("EcsView: required type %d is listed twice" % type_id)
 			return false
 		_required.append(store)
 
 	for type_id in excluded_types:
 		if not world.has_store(type_id):
-			push_error("EcsView: excluded-тип %d не зарегистрирован" % type_id)
+			push_error("EcsView: excluded type %d is not registered" % type_id)
 			return false
 		var store: EcsComponentStore = world.get_store(type_id)
 		if _required.has(store):
-			push_error("EcsView: тип %d одновременно required и excluded" % type_id)
+			push_error("EcsView: type %d is both required and excluded" % type_id)
 			return false
 		if _excluded.has(store):
-			push_error("EcsView: excluded-тип %d указан дважды" % type_id)
+			push_error("EcsView: excluded type %d is listed twice" % type_id)
 			return false
 		_excluded.append(store)
 
@@ -80,8 +78,8 @@ func configure(
 	return true
 
 
-## Выбирает наименьшее из обязательных хранилищ. Без аллокаций и без
-## материализации.
+## Picks the smallest of the required stores. No allocation and no
+## materialization.
 func refresh_driver() -> void:
 	if not _configured:
 		return
@@ -113,9 +111,9 @@ func get_candidate_count() -> int:
 	return _driver.count if _driver != null else 0
 
 
-## Индекс в списке обязательных того хранилища, которое выбрал
-## [method refresh_driver]. Принадлежность именно к нему подразумевается самим
-## обходом его плотного массива, поэтому рукописный цикл может его не проверять.
+## The index, in the required list, of the store [method refresh_driver] chose.
+## Membership in it is implied by walking its own dense array, so a hand-written
+## loop can skip checking it.
 func get_driver_required_index() -> int:
 	return _driver_index
 
@@ -128,8 +126,8 @@ func get_required_store(index: int) -> EcsComponentStore:
 	return _required[index]
 
 
-## Sparse-массив обязательного хранилища [param index] — чтобы встроить проверку
-## принадлежности в собственный цикл системы. Только для чтения.
+## The sparse array of required store [param index] — for inlining the membership
+## check into a system's own loop. Read-only.
 func get_required_sparse(index: int) -> PackedInt32Array:
 	return _required[index].sparse_index
 
@@ -142,7 +140,7 @@ func get_excluded_store(index: int) -> EcsComponentStore:
 	return _excluded[index]
 
 
-## Sparse-массив исключённого хранилища [param index]. Только для чтения.
+## The sparse array of excluded store [param index]. Read-only.
 func get_excluded_sparse(index: int) -> PackedInt32Array:
 	return _excluded[index].sparse_index
 
@@ -151,26 +149,27 @@ func is_configured() -> bool:
 	return _configured
 
 
-## Только проверка метаданных; на исполнение она не влияет никак. Старые
-## системы без объявлений принимаются, пока этот метод не вызван явно.
+## A metadata check only; it does not affect execution in any way. Legacy
+## systems with no declarations are accepted until this method is called
+## explicitly.
 func validate_owner_access(report_errors: bool = true) -> bool:
 	if _owner_system == null:
 		return true
 	if not _owner_system.access_metadata_complete:
 		if report_errors:
-			push_error("EcsView: система %s не завершила описание доступа" % _owner_system.system_name)
+			push_error("EcsView: system %s has not completed its access description" % _owner_system.system_name)
 		return false
 	var valid := true
 	for store in _required:
 		if not _owner_system.has_declared_access(store.type_id):
 			valid = false
 			if report_errors:
-				push_error("EcsView: система %s не объявила доступ к типу %d"
+				push_error("EcsView: system %s did not declare access to type %d"
 					% [_owner_system.system_name, store.type_id])
 	for store in _excluded:
 		if not _owner_system.has_declared_access(store.type_id):
 			valid = false
 			if report_errors:
-				push_error("EcsView: система %s не объявила доступ к excluded-типу %d"
+				push_error("EcsView: system %s did not declare access to excluded type %d"
 					% [_owner_system.system_name, store.type_id])
 	return valid

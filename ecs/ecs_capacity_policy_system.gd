@@ -1,19 +1,19 @@
 class_name EcsCapacityPolicySystem
 extends EcsSystem
 
-## Растит мир ДО того, как в нём закончатся идентификаторы сущностей.
+## Grows the world BEFORE it runs out of entity identifiers.
 ##
-## [method EcsWorld.create_entity] возвращает -1, когда мир заполнен, а
-## [method EcsWorld.reserve_capacity] — это явный аллоцирующий барьер, который
-## нельзя выполнять посреди обхода систем. Такое сочетание нормально, пока
-## население предсказуемо, но симуляция со взрывным ростом — делящаяся культура
-## клеток, спавнер волн, цепная реакция — способна удвоить население за
-## секунды и начать тихо терять споны.
+## [method EcsWorld.create_entity] returns -1 when the world is full, and
+## [method EcsWorld.reserve_capacity] is an explicit allocating barrier that must
+## not run in the middle of a system iteration. That combination is fine while
+## the population is predictable, but a simulation with explosive growth — a
+## dividing cell culture, a wave spawner, a chain reaction — can double its
+## population in seconds and start silently losing spawns.
 ##
-## Эта система проверяет коэффициент заполнения раз в
-## [member check_interval_frames] кадров и растит мир, как только он переходит
-## порог [member grow_threshold] — то есть рост происходит, пока место ещё
-## есть, а не после того, как споны уже потерялись.
+## This system checks the fill factor once every [member check_interval_frames]
+## frames and grows the world as soon as it crosses the [member grow_threshold]
+## — so growth happens while there is still room, not after spawns have already
+## been lost.
 ##
 ## [codeblock]
 ## var policy := EcsCapacityPolicySystem.new(world)
@@ -22,39 +22,36 @@ extends EcsSystem
 ## policy.maximum_capacity = 200_000
 ## policy.on_capacity_grown = _resize_my_render_buffers
 ## scheduler.add_system(EcsReaperSystem.new(world))
-## scheduler.add_system(policy)                       # сразу после жнеца
+## scheduler.add_system(policy)                       # right after the reaper
 ## [/codeblock]
 ##
-## [b]Регистрируйте её сразу после жнеца[/b] или на другой явной границе фаз.
-## Рост переаллоцирует все буферы мира и хранилищ, поэтому ни одна система не
-## должна удерживать плотный слот или закешированный псевдоним массива через
-## этот вызов.
+## [b]Register it right after the reaper[/b] or at another explicit phase
+## boundary. Growth reallocates all the world's and stores' buffers, so no system
+## may be holding a dense slot or a cached array alias across that call.
 ##
-## Библиотека умеет увеличить только СВОИ буферы. Всё, что игра выделила
-## параллельно — `MultiMesh`, батчи физики, сетевые массивы, — увеличивает ваш
-## колбек [member on_capacity_grown].
+## The library can only grow its OWN buffers. Everything the game allocated
+## alongside — `MultiMesh`, physics batches, network arrays — is grown by your
+## [member on_capacity_grown] callback.
 
-## Расти, когда эта доля мира занята живыми сущностями.
+## Grow when this fraction of the world is occupied by live entities.
 var grow_threshold: float = 0.85
 
-## Новая ёмкость — старая, умноженная на это число. 1.5 делает переаллокацию
-## редкой, не удваивая память на каждом шаге.
+## The new capacity is the old one multiplied by this number. 1.5 makes
+## reallocation rare without doubling the memory on every step.
 var growth_factor: float = 1.5
 
-## Жёсткий потолок. 0 означает «без ограничения, кроме того, что позволяет
-## раскладка handle».
+## A hard ceiling. 0 means "no limit beyond what the handle layout allows".
 var maximum_capacity: int = 0
 
-## Как часто выполняется проверка. Проверять каждый кадр бессмысленно:
-## коэффициент заполнения не может заметно сдвинуться за один кадр, а рост —
-## событие редкое.
+## How often the check runs. Checking every frame is pointless: the fill factor
+## cannot move noticeably in one frame, and growth is a rare event.
 var check_interval_frames: int = 30
 
-## Вызывается как `callable.call(previous_capacity, new_capacity)` после
-## успешного роста, чтобы игра увеличила буферы, о которых библиотека не знает.
+## Called as `callable.call(previous_capacity, new_capacity)` after a successful
+## growth, so the game can grow buffers the library does not know about.
 var on_capacity_grown: Callable = Callable()
 
-## Диагностика.
+## Diagnostics.
 var growth_count: int = 0
 var last_growth_capacity: int = 0
 
@@ -75,7 +72,7 @@ func setup(world: EcsWorld, context) -> void:
 	if _world == null and context != null and context.get(&"world") != null:
 		_world = context.get(&"world")
 	if _world == null:
-		push_error("EcsCapacityPolicySystem: нет мира — передайте его в _init() или в setup()")
+		push_error("EcsCapacityPolicySystem: no world — pass it to _init() or setup()")
 
 
 func execute(_delta: float) -> void:
@@ -90,8 +87,8 @@ func execute(_delta: float) -> void:
 	grow_now()
 
 
-## Немедленно выполняет проверку роста, игнорируя интервал. Используйте прямо
-## перед всплеском, размер которого уже известен заранее.
+## Runs the growth check immediately, ignoring the interval. Use it right before
+## a spike whose size you already know in advance.
 func grow_now() -> bool:
 	if _world == null:
 		return false

@@ -1,30 +1,29 @@
 extends SceneTree
 
-## Полный разобранный пример: колония микробов в чашке Петри.
+## A full, dissected example: a colony of microbes in a Petri dish.
 ##
 ##   godot --headless --script res://addons/aegis_ecs/example/colony_example.gd
 ##
-## Клетки блуждают, тратят энергию, расталкиваются, делятся, когда сыты, и
-## гибнут, когда голодны. Пример достаточно мал, чтобы прочитать его за один
-## присест, и при этом задействует каждую часть библиотеки, которая нужна
-## настоящей симуляции:
+## Cells wander, spend energy, push each other apart, divide when well-fed and
+## die when starving. The example is small enough to read in one sitting, and
+## still exercises every part of the library a real simulation needs:
 ##
-##   * EcsPackedStore          -- данные без шаблонного кода
-##   * EcsTagStore             -- признак без данных
-##   * UniformSpatialGrid      -- «кто рядом», в плоском 2D-режиме
-##   * SimulationClock         -- ускорение, остающееся воспроизводимым
-##   * журнал изменений        -- реакция на рождения и смерти
-##   * EcsCapacityPolicySystem -- население, способное удвоиться за секунды
-##   * EcsReaperSystem         -- единственная точка уничтожения
-##   * фазы                    -- суб-шаги симуляции против работы раз в кадр
+##   * EcsPackedStore          -- data with no boilerplate
+##   * EcsTagStore             -- a trait with no data
+##   * UniformSpatialGrid      -- "who is nearby", in flat 2D mode
+##   * SimulationClock         -- a speed-up that stays reproducible
+##   * the change log          -- reacting to births and deaths
+##   * EcsCapacityPolicySystem -- a population that can double in seconds
+##   * EcsReaperSystem         -- the single point of destruction
+##   * phases                  -- simulation sub-steps vs once-per-frame work
 ##
-## Пошаговый разбор — в docs/uk/11-povnyi-pryklad.md.
+## A step-by-step walk-through is in docs/en/11-full-example.md.
 ##
-## Внутренние классы примера имеют префикс Colony (ColonyMovementSystem и т.п.):
-## инструментов из этого файла не видно снаружи, но Godot запрещает внутреннему
-## классу иметь то же имя, что и глобальный `class_name` в проекте, — а имена
-## `Context`, `MovementSystem`, `SpatialIndexSystem` в реальной игре обычно
-## заняты.
+## The example's inner classes are prefixed with Colony (ColonyMovementSystem
+## and so on): tools from this file are not visible from outside, but Godot
+## forbids an inner class from having the same name as a global `class_name` in
+## the project — and the names `Context`, `MovementSystem`, `SpatialIndexSystem`
+## are usually taken in a real game.
 
 const DISH_RADIUS: float = 60.0
 const START_POPULATION: int = 200
@@ -43,36 +42,37 @@ const PHASE_SIMULATION: int = 100
 const PHASE_STATISTICS: int = 200
 
 
-# --- Компоненты ---------------------------------------------------------------
+# --- Components -------------------------------------------------------------
 
-## Одно хранилище держит всё, что читается вместе на каждом шаге. Разнести
-## позицию и энергию значило бы добавить поиск через sparse в самый горячий цикл.
+## One store holds everything that is read together on every step. Splitting
+## position and energy apart would add a sparse lookup to the hottest loop.
 class ColonyCellStore extends EcsPackedStore:
 	var position: PackedVector3Array = PackedVector3Array()
 	var heading: PackedFloat32Array = PackedFloat32Array()
 	var energy: PackedFloat32Array = PackedFloat32Array()
 	var age: PackedFloat32Array = PackedFloat32Array()
-	## Сколько соседей замечено в радиусе CROWD_RADIUS на прошлом шаге. Пишет
-	## ColonyMovementSystem (которая и так спрашивает сетку), читает ColonyMetabolismSystem —
-	## поэтому дорогой пространственный запрос оплачивается ровно один раз.
+	## How many neighbours were noticed within CROWD_RADIUS on the previous step.
+	## Written by ColonyMovementSystem (which asks the grid anyway), read by
+	## ColonyMetabolismSystem -- so the expensive spatial query is paid for
+	## exactly once.
 	var crowding: PackedFloat32Array = PackedFloat32Array()
 
 	func _init() -> void:
 		track(&"position", &"heading", &"energy", &"age", &"crowding")
 
 
-# --- Контекст -----------------------------------------------------------------
+# --- Context ---------------------------------------------------------------
 
 class ColonyContext:
 	var world: EcsWorld
 	var cells: ColonyCellStore
-	## Тег, а не поле bool: он даёт системе деления плотный список ровно тех клеток,
-	## что готовы, вместо просмотра всех подряд.
+	## A tag, not a bool field: it gives the division system a dense list of
+	## exactly the cells that are ready, instead of scanning all of them.
 	var dividing: EcsTagStore
 	var grid: UniformSpatialGrid
 	var rng: RandomNumberGenerator
 
-	# Переиспользуемые буферы. Выделены один раз, поэтому ни один кадр не аллоцирует.
+	# Reusable buffers. Allocated once, so no frame allocates.
 	var index_ids: PackedInt32Array = PackedInt32Array()
 	var index_points: PackedVector3Array = PackedVector3Array()
 	var spawn_buffer: PackedInt32Array = PackedInt32Array()
@@ -87,11 +87,11 @@ class ColonyContext:
 		spawn_buffer.resize(capacity)
 
 
-# --- Системы ------------------------------------------------------------------
+# --- Systems -------------------------------------------------------------
 
-## Перестраивает индекс соседей. Обязана выполняться ПОСЛЕ движения и ДО всего,
-## что спрашивает «кто рядом» — этот порядок и есть единственная причина, по
-## которой система вынесена в отдельный шаг.
+## Rebuilds the neighbour index. Must run AFTER movement and BEFORE anything that
+## asks "who is nearby" -- that order is the only reason this system is a
+## separate step.
 class ColonySpatialIndexSystem extends EcsSystem:
 	var _context: ColonyContext
 
@@ -116,7 +116,7 @@ class ColonySpatialIndexSystem extends EcsSystem:
 		_context.grid.rebuild(ids, points, count)
 
 
-## Случайное блуждание плюс расталкивание с близкими соседями.
+## A random walk plus pushing away from close neighbours.
 class ColonyMovementSystem extends EcsSystem:
 	var _context: ColonyContext
 
@@ -132,7 +132,7 @@ class ColonyMovementSystem extends EcsSystem:
 		var cells: ColonyCellStore = _context.cells
 		var grid: UniformSpatialGrid = _context.grid
 		var rng: RandomNumberGenerator = _context.rng
-		# Локальные псевдонимы: чтение поля на каждой итерации стоило бы в разы дороже.
+		# Local aliases: an object field read on every iteration would cost several times more.
 		var position: PackedVector3Array = cells.position
 		var heading: PackedFloat32Array = cells.heading
 		var crowding: PackedFloat32Array = cells.crowding
@@ -142,8 +142,8 @@ class ColonyMovementSystem extends EcsSystem:
 			var point: Vector3 = position[slot]
 			var angle: float = heading[slot] + rng.randf_range(-1.5, 1.5) * delta
 
-			# Уходим от ближайшего соседа, чтобы колония расползалась, а не схлопывалась
-			# в одну точку.
+			# Move away from the nearest neighbour so the colony spreads out
+			# rather than collapsing into a single point.
 			var neighbours: int = grid.query_sphere(point, CROWD_RADIUS, MAX_NEIGHBOURS)
 			crowding[slot] = float(maxi(neighbours - 1, 0))
 			if neighbours > 1:
@@ -159,7 +159,7 @@ class ColonyMovementSystem extends EcsSystem:
 			point.x += sin(angle) * speed * delta
 			point.z += cos(angle) * speed * delta
 
-			# Чашка круглая: отражаемся от стенки, доворачивая внутрь.
+			# The dish is round: bounce off the wall, turning inward.
 			var from_centre: float = sqrt(point.x * point.x + point.z * point.z)
 			if from_centre > DISH_RADIUS:
 				var inward: float = atan2(-point.x, -point.z)
@@ -171,8 +171,8 @@ class ColonyMovementSystem extends EcsSystem:
 			heading[slot] = angle
 
 
-## Старит каждую клетку, тратит энергию и решает, кто готов делиться, а кто
-## оголодал. Оба исхода здесь только ПОМЕЧАЮТСЯ.
+## Ages every cell, spends energy and decides who is ready to divide and who has
+## starved. Both outcomes here only MARK.
 class ColonyMetabolismSystem extends EcsSystem:
 	var _context: ColonyContext
 
@@ -198,24 +198,23 @@ class ColonyMetabolismSystem extends EcsSystem:
 
 		for slot in cells.count:
 			age[slot] += delta
-			# Еда делится локально: одинокая клетка набирает, клетка в тесноте голодает.
-			# Эта единственная строка и заставляет колонию расползаться, а затем
-			# устанавливаться, вместо того чтобы расти без предела.
+			# Food is shared locally: a lone cell gains, a crowded cell starves.
+			# This single line is what makes the colony spread out and then
+			# settle, instead of growing without bound.
 			energy[slot] += (FOOD_PER_SECOND - crowding[slot] * CROWD_PENALTY) * delta
 
 			var entity: int = owners[slot]
 			if energy[slot] <= 0.0:
-				# Только помечает. Клетка живёт до работы жнеца, поэтому этот обход не
-				# рассыпается у нас под ногами.
+				# Only marks. The cell lives until the reaper runs, so this
+				# iteration does not fall apart under our feet.
 				world.queue_destroy(entity)
 			elif energy[slot] >= DIVIDE_ENERGY and age[slot] >= DIVIDE_AGE:
 				dividing.attach(entity)
 
 
-## Делит надвое каждую готовую клетку. Создавать сущности посреди кадра
-## безопасно: attach только ДОПИСЫВАЕТ в конец плотного массива и никогда ничего
-## не переносит, поэтому цикл ниже не может быть нарушен теми клетками, которые
-## он же и создаёт.
+## Splits every ready cell in two. Creating entities mid-frame is safe: attach
+## only APPENDS to the end of the dense array and never relocates anything, so
+## the loop below cannot be disrupted by the cells it creates itself.
 class ColonyDivisionSystem extends EcsSystem:
 	var _context: ColonyContext
 
@@ -240,7 +239,7 @@ class ColonyDivisionSystem extends EcsSystem:
 		var rng: RandomNumberGenerator = _context.rng
 		var parents: int = mini(dividing.count, _context.spawn_buffer.size())
 
-		# Один пакетный вызов вместо вызова на каждую дочернюю клетку.
+		# One batched call instead of a call per child cell.
 		var born: int = world.create_entities(parents, _context.spawn_buffer)
 		if born <= 0:
 			return
@@ -255,7 +254,7 @@ class ColonyDivisionSystem extends EcsSystem:
 				continue
 			var child_slot: int = first_slot + i
 
-			# Родитель платит за деление; обе половины начинают заново.
+			# The parent pays for the division; both halves start over.
 			cells.energy[parent_slot] *= 0.5
 			cells.age[parent_slot] = 0.0
 
@@ -266,14 +265,14 @@ class ColonyDivisionSystem extends EcsSystem:
 			cells.age[child_slot] = 0.0
 			cells.crowding[child_slot] = cells.crowding[parent_slot]
 
-		# Тег отработал своё на этом шаге. clear() почти O(1) и не аллоцирует, в
-		# отличие от поочерёдного отсоединения каждой сущности.
+		# The tag has done its job for this step. clear() is almost O(1) and does
+		# not allocate, unlike detaching each entity one by one.
 		dividing.clear()
 
 
-## Читает журнал изменений, который хранилища вели за нас, и очищает его.
-## Зарегистрирована ПОСЛЕ жнеца, поэтому к этому моменту `added` содержит
-## рождения этого кадра, а `removed` — его смерти.
+## Reads the change log the stores kept for us, and clears it. Registered AFTER
+## the reaper, so by now `added` holds this frame's births and `removed` its
+## deaths.
 class ColonyStatisticsSystem extends EcsSystem:
 	var _context: ColonyContext
 
@@ -292,7 +291,7 @@ class ColonyStatisticsSystem extends EcsSystem:
 		_context.world.clear_change_logs()
 
 
-# --- Сборка -------------------------------------------------------------------
+# --- Assembly -------------------------------------------------------------
 
 func _init() -> void:
 	print("=== Aegis ECS: colony example ===")
@@ -308,11 +307,11 @@ func _init() -> void:
 	context.world.register_store(context.cells, TYPE_CELL)
 	context.world.register_store(context.dividing, TYPE_DIVIDING)
 
-	# Рождения и смерти нужны как события, поэтому включаем журнал у этого хранилища.
+	# Births and deaths are needed as events, so enable the log on this store.
 	context.cells.track_changes = true
 
-	# Чашка — это плоскость, поэтому сетка получает один слой по Y: меньше ячеек
-	# обходить на каждой перестройке, и совершенно бесплатно.
+	# The dish is a plane, so the grid gets a single Y layer: fewer cells to walk
+	# on every rebuild, and completely free.
 	context.grid = UniformSpatialGrid.new()
 	var cell_size: float = UniformSpatialGrid.suggest_cell_size(
 		DISH_RADIUS, 0.0, START_POPULATION * 4, CROWD_RADIUS)
@@ -327,12 +326,12 @@ func _init() -> void:
 	policy.maximum_capacity = 20000
 	policy.check_interval_frames = 10
 	policy.on_capacity_grown = func(_previous: int, next: int) -> void:
-		# Библиотека увеличивает свои буферы; всё, что игра выделила рядом с ними —
-		# ответственность самой игры.
+		# The library grows its own buffers; everything the game allocated
+		# alongside them is the game's own responsibility.
 		context.resize_scratch(next)
 		context.grid.configure(DISH_RADIUS, 0.0, cell_size, next)
 
-	# Порядок регистрации ЕСТЬ поведение. Читайте его сверху вниз как алгоритм.
+	# Registration order IS behaviour. Read it top to bottom as an algorithm.
 	var scheduler := EcsScheduler.new()
 	scheduler.add_system(ColonyMovementSystem.new(), PHASE_SIMULATION)
 	scheduler.add_system(ColonySpatialIndexSystem.new(), PHASE_SIMULATION)
@@ -348,8 +347,8 @@ func _init() -> void:
 
 	_seed_colony(context)
 
-	# Фиксированный шаг делает результат воспроизводимым при любой частоте кадров и
-	# любом запрошенном ускорении.
+	# A fixed step makes the result reproducible at any frame rate and any
+	# requested speed-up.
 	var clock := SimulationClock.new()
 	clock.fixed_step = 1.0 / 30.0
 	clock.time_scale = 8.0
@@ -363,7 +362,7 @@ func _init() -> void:
 		scheduler.begin_frame()
 		for step in substeps:
 			scheduler.execute_phase(PHASE_SIMULATION, clock.fixed_step)
-		# Статистика выполняется раз на отрисованный кадр, а не на каждый суб-шаг.
+		# Statistics run once per rendered frame, not per sub-step.
 		scheduler.execute_phase(PHASE_STATISTICS, frame_delta)
 
 		if frame % 60 == 0:

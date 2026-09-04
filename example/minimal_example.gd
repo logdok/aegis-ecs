@@ -1,33 +1,32 @@
 extends SceneTree
 
-## Минимальный, но ПОЛНЫЙ пример Aegis ECS — и одновременно самопроверка аддона.
+## A minimal but COMPLETE Aegis ECS example — and at the same time an add-on
+## self-check.
 ##
-## Запуск из корня проекта, содержащего аддон:
+## Run from the root of a project that contains the add-on:
 ##   godot --headless --script res://addons/aegis_ecs/example/minimal_example.gd
 ##
-## Показывает всё, что нужно для старта:
-##   1. объявление хранилища компонентов без шаблонного кода (EcsPackedStore);
-##   2. объявление системы и доступ к данным через собственный контекст;
-##   3. сборку мира и порядок, в котором всё регистрируется;
-##   4. правило «уничтожение происходит ровно в одной точке» (EcsReaperSystem);
-##   5. пакетный спавн;
-##   6. чтение встроенного профайлера.
+## It shows everything needed to get started:
+##   1. declaring a component store with no boilerplate (EcsPackedStore);
+##   2. declaring a system and accessing data through your own context;
+##   3. assembling the world and the order in which everything is registered;
+##   4. the "destruction happens at exactly one point" rule (EcsReaperSystem);
+##   5. batched spawning;
+##   6. reading the built-in profiler.
 ##
-## Классы здесь объявлены ВНУТРЕННИМИ (`class ... extends ...`), а не через
-## `class_name`, чтобы пример ничего не добавлял в глобальное пространство имён
-## вашего проекта.
+## The classes here are declared INNER (`class ... extends ...`), not with
+## `class_name`, so the example adds nothing to your project's global namespace.
 
 
-# --- 1. Хранилища компонентов -------------------------------------------------
+# --- 1. Component stores ---------------------------------------------------
 
-## Данные компонента живут в параллельных Packed-массивах, адресуемых плотным
-## слотом. Наследование от EcsPackedStore означает объявить поля и один раз их
-## назвать: выделение памяти, рост и перенос при swap-remove сделаны за вас.
+## Component data lives in parallel Packed arrays addressed by a dense slot.
+## Extending EcsPackedStore means declaring the fields and naming them once:
+## memory allocation, growth and swap-remove relocation are done for you.
 ##
-## (Более низкоуровневый EcsComponentStore никуда не делся — если хранилищу
-## нужен полный ручной контроль; тогда оно обязано само реализовать
-## _reserve_dense и _relocate_dense, и забытый второй тихо портит данные при
-## удалении.)
+## (The lower-level EcsComponentStore is still there — if a store needs full
+## manual control; then it must implement _reserve_dense and _relocate_dense
+## itself, and a forgotten second one silently corrupts data on removal.)
 class PositionStore extends EcsPackedStore:
 	var x: PackedFloat32Array = PackedFloat32Array()
 	var y: PackedFloat32Array = PackedFloat32Array()
@@ -35,7 +34,7 @@ class PositionStore extends EcsPackedStore:
 	func _init() -> void:
 		track(&"x", &"y")
 
-	## Удобная обёртка: присоединить компонент и заполнить его одним вызовом.
+	## A convenience wrapper: attach the component and fill it in one call.
 	func assign(entity: int, start_x: float, start_y: float) -> int:
 		var slot: int = attach(entity)
 		if slot < 0:
@@ -61,11 +60,11 @@ class VelocityStore extends EcsPackedStore:
 		return slot
 
 
-# --- 2. Ваш контекст ----------------------------------------------------------
+# --- 2. Your context -----------------------------------------------------
 
-## Библиотека ничего не знает о вашей игре: она просто отдаёт этот объект каждой
-## системе в setup(). Держите здесь ссылки на хранилища и общее состояние, чтобы
-## системам никогда не приходилось знать друг о друге напрямую.
+## The library knows nothing about your game: it just hands this object to every
+## system in setup(). Keep references to stores and shared state here, so systems
+## never have to know about each other directly.
 class Context:
 	var world: EcsWorld
 	var positions: PositionStore
@@ -74,19 +73,19 @@ class Context:
 	var escaped_count: int = 0
 
 
-# --- 3. Системы ---------------------------------------------------------------
+# --- 3. Systems --------------------------------------------------------
 
-## Интегрирует скорость в позицию. Обратите внимание на обход: идём по ПЛОТНОМУ
-## массиву меньшего хранилища, а второй компонент добираем через sparse-индекс.
-## Это самый быстрый уровень API; EcsView и EcsQuery закрывают случаи, когда
-## состав компонентов меняется.
+## Integrates velocity into position. Note the iteration: walk the DENSE array of
+## the smaller store and fetch the second component through the sparse index.
+## This is the fastest API level; EcsView and EcsQuery cover the cases where the
+## component set changes.
 class MovementSystem extends EcsSystem:
 	var _context: Context
 
 	func _init() -> void:
 		system_name = "Movement"
-		# Пока время стоит, делать нечего, поэтому пусть планировщик пропустит вызов
-		# целиком, вместо того чтобы открывать execute() ранним возвратом.
+		# While time is stopped there is nothing to do, so let the scheduler skip
+		# the call entirely rather than opening execute() with an early return.
 		requires_time = true
 		declare_read(TYPE_VELOCITY).declare_write(TYPE_POSITION).complete_access_metadata()
 
@@ -97,8 +96,8 @@ class MovementSystem extends EcsSystem:
 		var positions: PositionStore = _context.positions
 		var velocities: VelocityStore = _context.velocities
 
-		# Локальные псевдонимы Packed-массивов: читать локальную переменную в цикле
-		# заметно дешевле, чем поле объекта на каждой итерации.
+		# Local aliases of the Packed arrays: reading a local variable in the
+		# loop is noticeably cheaper than an object field on every iteration.
 		var pos_slots: PackedInt32Array = positions.sparse_index
 		var px: PackedFloat32Array = positions.x
 		var py: PackedFloat32Array = positions.y
@@ -113,11 +112,11 @@ class MovementSystem extends EcsSystem:
 			px[slot] += dx[dense] * delta
 			py[slot] += dy[dense] * delta
 
-		# В Godot 4 Packed-массивы передаются по ссылке: локальные псевдонимы уже
-		# записали в хранилище. Обратное присваивание не требуется.
+		# In Godot 4 the Packed arrays are passed by reference: the local aliases
+		# already wrote into the store. No assignment back is needed.
 
 
-## Ставит в очередь на уничтожение всех, кто покинул арену.
+## Queues everyone who has left the arena for destruction.
 class BoundsSystem extends EcsSystem:
 	var _context: Context
 	var _limit: float
@@ -141,13 +140,13 @@ class BoundsSystem extends EcsSystem:
 
 		for dense in positions.count:
 			if absf(px[dense]) > _limit:
-				# Только ПОМЕЧАЕТ. Сущность живёт до конца кадра, поэтому этот плотный обход
-				# не рассыпается у нас под ногами.
+				# Only MARKS. The entity lives until the end of the frame, so this
+				# dense iteration does not fall apart under our feet.
 				world.queue_destroy(owners[dense])
 				_context.escaped_count += 1
 
 
-# --- 4. Сборка и запуск -------------------------------------------------------
+# --- 4. Assembly and run ---------------------------------------------
 
 const TYPE_POSITION: int = 0
 const TYPE_VELOCITY: int = 1
@@ -164,8 +163,8 @@ func _init() -> void:
 	var context := Context.new()
 	context.world = EcsWorld.new(1000)
 
-	# Хранилища: создать, затем зарегистрировать. Регистрация выделяет их
-	# внутренние массивы под ёмкость мира и обязана произойти до первой сущности.
+	# Stores: create, then register. Registration allocates their internal arrays
+	# for the world's capacity and must happen before the first entity.
 	context.positions = PositionStore.new()
 	context.velocities = VelocityStore.new()
 	context.alive_tag = EcsTagStore.new()
@@ -173,8 +172,8 @@ func _init() -> void:
 	context.world.register_store(context.velocities, TYPE_VELOCITY)
 	context.world.register_store(context.alive_tag, TYPE_ALIVE)
 
-	# Порядок регистрации = порядок исполнения = поведение. Движение должно
-	# отработать до проверки границ, а уничтожение — последним.
+	# Registration order = execution order = behaviour. Movement must run before
+	# the bounds check, and destruction last.
 	var scheduler := EcsScheduler.new()
 	scheduler.add_system(MovementSystem.new())
 	scheduler.add_system(BoundsSystem.new(100.0))
@@ -182,8 +181,8 @@ func _init() -> void:
 	scheduler.setup_all(context.world, context)
 	_expect(scheduler.validate_pipeline(context.world), "the pipeline validates")
 
-	# Пакетный спавн: один вызов вместо POPULATION вызовов. Идентификаторы падают
-	# в переиспользуемый буфер, а attach_many() даёт компонентам подряд идущие слоты.
+	# Batched spawn: one call instead of POPULATION calls. The identifiers land
+	# in a reusable buffer, and attach_many() gives the components contiguous slots.
 	var spawn_buffer := PackedInt32Array()
 	spawn_buffer.resize(POPULATION)
 	var spawned: int = context.world.create_entities(POPULATION, spawn_buffer)
@@ -201,7 +200,7 @@ func _init() -> void:
 	_expect(context.positions.count == POPULATION, "%d position components" % POPULATION)
 	_expect(context.alive_tag.count == POPULATION, "attach_many() tagged the whole batch")
 
-	# Кадры: за 10 секунд модельного времени все успевают уйти за границу.
+	# Frames: in 10 seconds of model time everyone gets across the boundary.
 	for frame in 600:
 		scheduler.execute_all(1.0 / 60.0)
 
@@ -212,17 +211,17 @@ func _init() -> void:
 	_expect(context.positions.count == context.world.get_live_count(),
 		"the store agrees with the world after destruction")
 
-	# Пауза: шаг нулевой длины не должен менять ничего.
+	# Pause: a zero-length step must change nothing.
 	var before: int = context.world.get_live_count()
 	scheduler.execute_all(0.0)
 	_expect(context.world.get_live_count() == before, "a zero-length step changed nothing")
 
-	# Сброс мира переиспользует каждый уже выделенный байт.
+	# Resetting the world reuses every already allocated byte.
 	context.world.reset()
 	_expect(context.world.get_live_count() == 0, "reset() emptied the world")
 	_expect(context.positions.count == 0, "reset() emptied the stores")
 
-	# Поиск хранилища по типу — для сборки и отладки, не для горячих циклов.
+	# Looking a store up by type — for assembly and debugging, not for hot loops.
 	_expect(context.world.get_store(TYPE_POSITION) == context.positions,
 		"get_store() finds a store by type")
 

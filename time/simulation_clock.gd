@@ -1,24 +1,24 @@
 class_name SimulationClock
 extends RefCounted
 
-## Аккумулятор фиксированного шага с масштабом времени — детерминизм, который
-## переживает ускорение.
+## A fixed-step accumulator with a time scale — determinism that survives a
+## speed-up.
 ##
-## Соглашение библиотеки о паузе (шаг нулевой длины) ничего не говорит о
-## РАЗМЕРЕ шага, а передавать сырую дельту кадра прямо в симуляцию допустимо
-## только пока эта дельта мала. Как только игрок получает возможность ускорить
-## время, это перестаёт работать: при 50x кадр в 16 мс превращается в шаг в
-## 800 мс, и всё, что продвигается по порогу — клетка, делящаяся в возрасте 10,
-## снаряд, проверяющий, не пролетел ли он мимо цели, кулдаун — перепрыгивает
-## сразу через несколько порогов за одно обновление. Симуляция не просто идёт
-## быстрее, она даёт ДРУГОЙ результат, и на более медленной машине — снова
-## другой.
+## The library's pause convention (a zero-length step) says nothing about the
+## SIZE of the step, and passing the frame's raw delta straight into the
+## simulation is fine only while that delta is small. The moment the player can
+## speed time up, this stops working: at 50x a 16 ms frame turns into an 800 ms
+## step, and anything that advances by a threshold — a cell that divides at
+## age 10, a projectile checking whether it flew past its target, a cooldown —
+## jumps over several thresholds in a single update. The simulation does not just
+## run faster, it produces a DIFFERENT result, and a different one again on a
+## slower machine.
 ##
-## Фиксированный шаг убирает частоту кадров из уравнения. Часы накапливают
-## реальное время, умножают его на [member time_scale] и сообщают, сколько
-## одинаковых отрезков [member fixed_step] в накопленное поместилось. Каждый
-## отрезок одинаков независимо от машины и настройки скорости, поэтому
-## результат воспроизводим.
+## A fixed step removes the frame rate from the equation. The clock accumulates
+## real time, multiplies it by [member time_scale] and reports how many identical
+## [member fixed_step] segments fit into the accumulated time. Every segment is
+## identical regardless of the machine and the speed setting, so the result is
+## reproducible.
 ##
 ## [codeblock]
 ## var clock := SimulationClock.new()
@@ -29,69 +29,68 @@ extends RefCounted
 ##     var steps: int = clock.advance(delta)
 ##     for i in steps:
 ##         scheduler.execute_phase(PHASE_SIMULATION, clock.fixed_step)
-##     # Презентация выполняется один раз на отрисованный кадр, каким бы ни был
-##     # масштаб времени -- и работает даже при steps == 0, что и держит
-##     # поставленную на паузу игру нарисованной.
+##     # Presentation runs once per rendered frame, whatever the time scale --
+##     # and it runs even at steps == 0, which is what keeps a paused game drawn.
 ##     scheduler.execute_phase(PHASE_PRESENTATION, delta)
 ## [/codeblock]
 ##
-## [b]Обратите внимание на две разные дельты.[/b] Фазы симуляции получают
-## [member fixed_step], презентация — реальную дельту кадра. Прогонять весь
-## конвейер через цикл суб-шагов означало бы N раз за кадр делать работу
-## рендера без всякой пользы.
+## [b]Notice the two different deltas.[/b] The simulation phases get
+## [member fixed_step], presentation gets the frame's real delta. Running the
+## whole pipeline through the sub-step loop would mean doing the rendering work N
+## times per frame for no benefit.
 ##
-## Если фазы не используются, эквивалент для одной фазы:
+## If you do not use phases, the equivalent for a single phase is:
 ## [codeblock]
 ## var steps: int = clock.advance(delta)
 ## if steps == 0:
-##     scheduler.execute_all(0.0)          # пауза: только системы без requires_time
+##     scheduler.execute_all(0.0)          # pause: only systems without requires_time
 ## else:
 ##     for i in steps:
 ##         scheduler.execute_all(clock.fixed_step)
 ## [/codeblock]
 
-## Длина одного отрезка симуляции, в секундах. 1/60 — хороший вариант по
-## умолчанию; более медленной симуляции подойдёт 1/30, и это вдвое сократит
-## работу.
+## The length of one simulation segment, in seconds. 1/60 is a good default; a
+## slower simulation is fine with 1/30, and that halves the work.
 var fixed_step: float = 1.0 / 60.0:
 	set(value):
 		fixed_step = maxf(value, 0.000001)
 
-## Множитель реального времени. 0 замораживает симуляцию, 1 — реальное время,
-## 50 — быстрая перемотка. Отрицательные значения считаются нулём.
+## The real-time multiplier. 0 freezes the simulation, 1 is real time, 50 is fast
+## forward. Negative values are treated as zero.
 var time_scale: float = 1.0
 
-## Верхняя граница числа отрезков, которые может выдать один [method advance].
+## The upper bound on the number of segments a single [method advance] can
+## return.
 ##
-## Это запредохранитель от «спирали смерти». Если один кадр оказался медленным,
-## в аккумуляторе скопилось больше времени обычного; прогнать всё накопленное
-## сделает этот кадр ещё медленнее, что накопит ещё больше. Сверх этого числа
-## излишек ОТБРАСЫВАЕТСЯ — симуляция ненадолго идёт в замедленном темпе вместо
-## того, чтобы заклиниться. Поднимите значение, чтобы терпеть более крупные
-## подвисания, снизьте — чтобы ограничить худший кадр.
+## This is the safety valve against the "death spiral". If one frame was slow,
+## more time than usual accumulated; running all the accumulated time makes this
+## frame even slower, which accumulates even more. Beyond this number the surplus
+## is DROPPED — the simulation briefly runs in slow motion instead of locking up.
+## Raise the value to tolerate larger stalls, lower it to bound the worst frame.
 var max_substeps: int = 8
 
-## Замораживает часы, не теряя ни аккумулятор, ни масштаб времени.
+## Freezes the clock without losing either the accumulator or the time scale.
 var paused: bool = false
 
-## Сколько секунд симуляции прошло с последнего [method reset]. Растёт ровно на
-## `fixed_step` за отрезок, поэтому значение точное, а не дрейфующее.
+## How many seconds of simulation have elapsed since the last [method reset].
+## Grows by exactly `fixed_step` per segment, so the value is exact, not
+## drifting.
 var elapsed_simulated: float = 0.0
 
-## Сколько отрезков выдано всего с последнего [method reset].
+## How many segments have been produced in total since the last [method reset].
 var total_substeps: int = 0
 
-## Сколько отрезков отброшено предохранителем [member max_substeps] с
-## последнего [method reset]. Устойчивый рост означает, что симуляция не
-## успевает за запрошенным [member time_scale].
+## How many segments the [member max_substeps] valve has discarded since the last
+## [method reset]. A steady rise means the simulation cannot keep up with the
+## requested [member time_scale].
 var dropped_substeps: int = 0
 
 var _accumulator: float = 0.0
 var _last_substeps: int = 0
 
 
-## Принимает один реальный кадр и возвращает, сколько фиксированных отрезков
-## нужно выполнить сейчас. Вызывать ровно один раз за кадр.
+## Takes one real frame and returns how many fixed segments to run now. Call it
+## exactly once per frame.
 func advance(real_delta: float) -> int:
 	_last_substeps = 0
 	if paused or real_delta <= 0.0 or time_scale <= 0.0:
@@ -112,38 +111,38 @@ func advance(real_delta: float) -> int:
 	return steps
 
 
-## Сколько отрезков вернул последний [method advance].
+## How many segments the last [method advance] returned.
 func get_last_substeps() -> int:
 	return _last_substeps
 
 
-## Доля отрезка, сейчас лежащая в аккумуляторе неизрасходованной, в [0, 1).
+## The fraction of a segment currently sitting unspent in the accumulator, in
+## [0, 1).
 ##
-## Это коэффициент интерполяции для плавного рендера: рисуйте движущийся объект
-## как `previous_position.lerp(current_position, clock.get_alpha())`, и он
-## перестанет выглядеть ступенчатым, когда частота симуляции ниже частоты
-## кадров.
+## This is the interpolation factor for smooth rendering: draw a moving object as
+## `previous_position.lerp(current_position, clock.get_alpha())` and it stops
+## looking steppy when the simulation rate is below the frame rate.
 func get_alpha() -> float:
 	return clampf(_accumulator / fixed_step, 0.0, 1.0)
 
 
-## True, пока предохранитель отбрасывает время, то есть запрошенный масштаб
-## времени превышает то, что машина способна отсимулировать.
+## True while the valve is discarding time, that is, while the requested time
+## scale exceeds what the machine can actually simulate.
 func is_saturated() -> bool:
 	return _last_substeps >= max_substeps
 
 
-## Сколько секунд симуляции производится за секунду реального времени при
-## текущих настройках. Полезно для HUD, который показывает фактическую (а не
-## запрошенную) скорость.
+## How many seconds of simulation are produced per second of real time at the
+## current settings. Useful for a HUD that shows the actual (not the requested)
+## speed.
 func get_effective_time_scale(real_delta: float) -> float:
 	if real_delta <= 0.0:
 		return 0.0
 	return float(_last_substeps) * fixed_step / real_delta
 
 
-## Очищает аккумулятор и все счётчики. Вызывайте при перезапуске уровня, чтобы
-## долгое подвисание перед сбросом не выплеснуло отрезки в новый забег.
+## Clears the accumulator and every counter. Call it on a level restart so a long
+## stall before the reset does not spill segments into the new run.
 func reset() -> void:
 	_accumulator = 0.0
 	_last_substeps = 0

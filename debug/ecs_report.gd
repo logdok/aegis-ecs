@@ -1,26 +1,25 @@
 class_name EcsReport
 extends RefCounted
 
-## Отрисовывает записанное окно как текст или JSON.
+## Renders a recorded window as text or JSON.
 ##
-## Текстовая форма предназначена для вставки в тикет: это вся история прогона
-## примерно в тридцати строках. Форма JSON — чтобы приложить к тикету файлом или
-## сравнивать между сборками в CI.
+## The text form is meant to be pasted into a ticket: the whole history of a run
+## in about thirty lines. The JSON form is for attaching to a ticket as a file or
+## diffing between builds in CI.
 ##
-## Всё здесь статическое и без побочных эффектов, поэтому работает headless, без
-## интерфейса и без дерева сцены.
+## Everything here is static and side-effect-free, so it works headless, with no
+## interface and no scene tree.
 ##
 ## [codeblock]
 ## print(EcsReport.to_text(recorder, stats, world))
 ## EcsReport.save_json("user://ecs_report.json", recorder, stats, world)
 ## [/codeblock]
 
-## Полный текстовый отчёт: распределение, таблица по системам, атрибуция
-## всплесков.
+## The full text report: distribution, per-system table, spike attribution.
 static func to_text(recorder: EcsFrameRecorder, stats: EcsFrameStats, world: EcsWorld = null,
 		findings: Array = []) -> String:
 	if recorder == null or stats == null or not stats.is_analysed():
-		return "EcsReport: пока ничего не записано."
+		return "EcsReport: nothing recorded yet."
 
 	var lines: PackedStringArray = PackedStringArray()
 	lines.append("=== Aegis ECS report ===")
@@ -93,11 +92,11 @@ static func to_text(recorder: EcsFrameRecorder, stats: EcsFrameStats, world: Ecs
 	return "\n".join(lines)
 
 
-## Разбор одного записанного кадра, в порядке вызова систем. Передайте
-## [method EcsFrameStats.get_worst_frame_slot], чтобы препарировать худший.
+## A breakdown of one recorded frame, in system-call order. Pass
+## [method EcsFrameStats.get_worst_frame_slot] to dissect the worst one.
 static func frame_to_text(recorder: EcsFrameRecorder, slot: int, stats: EcsFrameStats = null) -> String:
 	if recorder == null or slot < 0:
-		return "EcsReport: такого кадра нет."
+		return "EcsReport: no such frame."
 	var lines: PackedStringArray = PackedStringArray()
 	var total: float = recorder.get_frame_total_usec(slot)
 	var substeps: int = recorder.get_frame_substeps(slot)
@@ -129,7 +128,7 @@ static func frame_to_text(recorder: EcsFrameRecorder, slot: int, stats: EcsFrame
 	return "\n".join(lines)
 
 
-## Машиночитаемый снимок окна.
+## A machine-readable snapshot of the window.
 static func to_dictionary(recorder: EcsFrameRecorder, stats: EcsFrameStats,
 		world: EcsWorld = null, findings: Array = []) -> Dictionary:
 	var result: Dictionary = {
@@ -182,8 +181,8 @@ static func to_dictionary(recorder: EcsFrameRecorder, stats: EcsFrameStats,
 	return result
 
 
-## Покадровый CSV всего окна: строка на кадр, столбец на систему. Подходит для
-## таблицы или скрипта построения графиков.
+## A per-frame CSV of the whole window: one row per frame, one column per
+## system. Suitable for a spreadsheet or a plotting script.
 static func to_csv(recorder: EcsFrameRecorder) -> String:
 	if recorder == null or recorder.get_frame_count() == 0:
 		return ""
@@ -223,7 +222,7 @@ static func save_text(path: String, recorder: EcsFrameRecorder, stats: EcsFrameS
 static func _write(path: String, content: String) -> bool:
 	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
-		push_error("EcsReport: не удалось записать «%s» (%s)" % [path, error_string(FileAccess.get_open_error())])
+		push_error("EcsReport: could not write '%s' (%s)" % [path, error_string(FileAccess.get_open_error())])
 		return false
 	file.store_string(content)
 	file.close()

@@ -1,50 +1,48 @@
 class_name EcsWorld
 extends RefCounted
 
-## Распределитель сущностей и реестр хранилищ компонентов.
+## The entity allocator and the component store registry.
 ##
-## Сущность здесь — это НЕ объект и не класс, а просто целое число (индекс).
-## Сама по себе сущность не хранит никаких данных: данные лежат в хранилищах
-## компонентов ([EcsComponentStore]), а сущность служит лишь ключом, по которому
-## эти хранилища индексируются. Это и есть суть ECS: Entity — просто id,
-## Component — чистые данные, System — чистая логика над этими данными. Игровые
-## объекты при таком подходе не являются нодами Godot: вся симуляция работает
-## поверх плоских массивов.
+## An entity here is NOT an object or a class, just an integer (an index). An
+## entity on its own holds no data: the data lives in component stores
+## ([EcsComponentStore]), and the entity is only a key those stores are indexed
+## by. That is the essence of ECS: Entity is just an id, Component is pure data,
+## System is pure logic over that data. Game objects in this approach are not
+## Godot nodes: the whole simulation runs over flat arrays.
 ##
-## Мир не растёт сам: ёмкость фиксируется при создании, а редкий явный рост
-## выполняется только через [method reserve_capacity] на loading barrier. Между
-## такими барьерами внутренние массивы переиспользуются без аллокаций. Это
-## осознанное решение: скрытая аллокация в горячем цикле при десятках тысяч
-## сущностей даёт всплески кадра на слабом мобильном устройстве.
+## The world does not grow on its own: the capacity is fixed at creation, and a
+## rare explicit growth happens only through [method reserve_capacity] at a
+## loading barrier. Between such barriers the internal arrays are reused with no
+## allocations. This is a deliberate decision: a hidden allocation in the hot
+## loop with tens of thousands of entities causes frame spikes on a weak mobile
+## device.
 ##
-## [b]МОДЕЛЬ УНИЧТОЖЕНИЯ — САМОЕ ВАЖНОЕ В ЭТОМ ФАЙЛЕ.[/b]
-## Ничто и никогда не уничтожается «по месту», прямо в момент вызова. Любой код,
-## который хочет убить сущность, зовёт [method queue_destroy] — это только
-## ПОМЕЧАЕТ её и не трогает данные. Реальное удаление делает
-## [method flush_destroy_queue], и выполняться оно должно в ОДНОЙ, заранее
-## известной точке кадра — обычно из последней системы конвейера (см.
-## [EcsReaperSystem], который существует ровно для того, чтобы вам не пришлось
-## писать эту систему самому).
+## [b]THE DESTRUCTION MODEL IS THE MOST IMPORTANT THING IN THIS FILE.[/b]
+## Nothing is ever destroyed "in place", right at the moment of the call. Any
+## code that wants to kill an entity calls [method queue_destroy] — that only
+## MARKS it and does not touch data. The real removal is done by
+## [method flush_destroy_queue], and it must run at ONE known point in the frame
+## — usually from the last system in the pipeline (see [EcsReaperSystem], which
+## exists precisely so you do not have to write that system yourself).
 ##
-## Зачем так? Если бы уничтожение было мгновенным, внутри одного кадра могло бы
-## произойти следующее: система A прочитала сущность E и держит её плотный слот,
-## затем система B уничтожила E, и этот слот через swap-remove достался ДРУГОЙ
-## сущности (см. [EcsComponentStore]). Система A прочитала бы данные,
-## принадлежащие уже кому-то другому — классический use-after-free, только
-## ничего не падает: данные просто тихо неверные. Откладывание уничтожения в
-## одну точку кадра исключает этот сценарий полностью: ни один плотный слот,
-## полученный в начале кадра, не может протухнуть до его конца.
+## Why this way? If destruction were instant, the following could happen within a
+## single frame: system A read entity E and is holding its dense slot, then
+## system B destroyed E, and that slot went, via swap-remove, to ANOTHER entity
+## (see [EcsComponentStore]). System A would read data that now belongs to
+## someone else — a classic use-after-free, except nothing crashes: the data is
+## just silently wrong. Deferring destruction to one point in the frame rules
+## this scenario out completely: no dense slot obtained at the start of a frame
+## can go stale before its end.
 ##
-## В горячих циклах сущность остаётся сырым int, поэтому массивы индексируются
-## без декодирования и без проверки поколения. Для ссылок, переживающих кадр
-## (цель, владелец, колбек), используйте generational handle из
-## [method make_handle] или [method create_entity_handle]. После уничтожения
-## сущности и повторной выдачи того же сырого id старый handle гарантированно
-## не разрешится.
+## In hot loops an entity stays a raw int, so arrays are indexed with no decoding
+## and no generation check. For references that survive across a frame (a target,
+## an owner, a callback), use the generational handle from [method make_handle]
+## or [method create_entity_handle]. After an entity is destroyed and the same
+## raw id is handed out again, an old handle is guaranteed not to resolve.
 ##
-## [method flush_destroy_queue] — structural sync point. Он может стоять на
-## нескольких явно заданных границах фаз, но только там, где ни одна система не
-## держит плотный слот: swap-remove может передвинуть другой компонент.
+## [method flush_destroy_queue] is a structural sync point. It can sit at several
+## explicitly defined phase boundaries, but only where no system is holding a
+## dense slot: swap-remove may move another component.
 
 const INVALID_ENTITY: int = -1
 const INVALID_HANDLE: int = 0
@@ -67,11 +65,11 @@ var _stores: Array[EcsComponentStore] = []
 var _stores_by_type: Dictionary = {}
 var _schema_locked: bool = false
 
-# Очередь уничтожения хранит рядом с сырым id штамп поколения, чтобы протухшая
-# запись не могла воскресить уже переиспользованный слот. Разделение на два
-# массива Int32 (вместо одного упакованного ключа Int64) стоит той же памяти и
-# позволяет flush_destroy_queue() уплотнить разрешённых жертв на месте, без
-# вспомогательного массива.
+# The destroy queue keeps a generation stamp next to the raw id, so a stale entry
+# cannot resurrect an already reused slot. Splitting it into two Int32 arrays
+# (instead of one packed Int64 key) costs the same memory and lets
+# flush_destroy_queue() compact the resolved victims in place, with no scratch
+# array.
 var _destroy_queue: PackedInt32Array = PackedInt32Array()
 var _destroy_generation: PackedInt32Array = PackedInt32Array()
 var _destroy_flag: PackedByteArray = PackedByteArray()
@@ -81,23 +79,24 @@ var _retired: PackedByteArray = PackedByteArray()
 var _retired_count: int = 0
 var _world_tag: int = 0
 
-## Монотонный диагностический счётчик создания, уничтожения, сброса,
-## регистрации хранилищ и явного роста ёмкости.
+## A monotonic diagnostic counter of creation, destruction, reset, store
+## registration and explicit capacity growth.
 var structural_version: int = 0
 
 
-## [param entity_capacity] — число одновременно живых сущностей. Буферы
-## выделяются сразу; редкий явный рост идёт через [method reserve_capacity] на
-## loading barrier. Автоматического роста в горячем цикле нет.
+## [param entity_capacity] is the number of simultaneously live entities. The
+## buffers are allocated at once; a rare explicit growth goes through
+## [method reserve_capacity] at a loading barrier. There is no automatic growth
+## in the hot loop.
 func _init(entity_capacity: int) -> void:
 	if entity_capacity < 1 or entity_capacity > _HANDLE_ENTITY_MASK + 1:
-		push_error("EcsWorld: начальная ёмкость %d вне диапазона 1..%d; создан безопасный мир с ёмкостью 1"
+		push_error("EcsWorld: initial capacity %d is outside the range 1..%d; created a safe world with capacity 1"
 			% [entity_capacity, _HANDLE_ENTITY_MASK + 1])
 		capacity = 1
 	else:
 		capacity = entity_capacity
 	if _next_world_tag > _HANDLE_WORLD_MASK:
-		push_error("EcsWorld: теги миров в процессе исчерпаны; generational handle недоступны")
+		push_error("EcsWorld: in-process world tags are exhausted; generational handles are unavailable")
 		_world_tag = 0
 	else:
 		_world_tag = _next_world_tag
@@ -112,27 +111,28 @@ func _init(entity_capacity: int) -> void:
 	reset()
 
 
-## Регистрирует [param store] под идентификатором [param component_type_id] и
-## инициализирует его (выделяя внутренние массивы под текущую ёмкость мира).
-## Каждое хранилище должно быть зарегистрировано ровно один раз, до создания
-## первой сущности — обычно все вместе, в одном месте сборки мира.
+## Registers [param store] under the identifier [param component_type_id] and
+## initializes it (allocating its internal arrays for the world's current
+## capacity). Every store must be registered exactly once, before the first
+## entity is created — usually all together, in one place while building the
+## world.
 ##
-## Идентификатор типа — любое целое на ваш выбор (обычно константа из вашего
-## перечисления). Мир использует его только для [method get_store] и
-## диагностики; на скорость он не влияет.
+## The type identifier is any integer you like (usually a constant from your own
+## enum). The world uses it only for [method get_store] and diagnostics; it does
+## not affect speed.
 func register_store(store: EcsComponentStore, component_type_id: int) -> bool:
 	if _schema_locked:
-		push_error("EcsWorld: схема заблокирована первым create_entity(); регистрируйте хранилища заранее")
+		push_error("EcsWorld: the schema is locked by the first create_entity(); register stores in advance")
 		return false
 	if store == null:
-		push_error("EcsWorld: register_store() получил null")
+		push_error("EcsWorld: register_store() got null")
 		return false
 	if _stores_by_type.has(component_type_id):
-		push_error("EcsWorld: тип компонента %d уже зарегистрирован — проверьте, не продублирована ли константа типа"
+		push_error("EcsWorld: component type %d is already registered — check whether a type constant is duplicated"
 			% component_type_id)
 		return false
 	if _stores.has(store) or store.is_initialized():
-		push_error("EcsWorld: хранилище уже зарегистрировано под другим типом или в другом мире")
+		push_error("EcsWorld: the store is already registered under another type or in another world")
 		return false
 	if not store.initialize(component_type_id, capacity, self):
 		return false
@@ -142,12 +142,12 @@ func register_store(store: EcsComponentStore, component_type_id: int) -> bool:
 	return true
 
 
-## Возвращает зарегистрированное хранилище по идентификатору типа, либо null.
+## Returns the registered store for a type identifier, or null.
 ##
-## Предназначен для сборки мира, отладки и инструментов. В горячем цикле системы
-## так делать НЕ нужно: держите типизированную ссылку на хранилище в своём
-## объекте-контексте и обращайтесь к ней напрямую — это и быстрее (нет поиска по
-## словарю), и статически типизировано.
+## Meant for building the world, debugging and tooling. Do NOT do this in a
+## system's hot loop: keep a typed reference to the store in your own context
+## object and access it directly — that is both faster (no dictionary lookup) and
+## statically typed.
 func get_store(component_type_id: int) -> EcsComponentStore:
 	return _stores_by_type.get(component_type_id)
 
@@ -156,10 +156,10 @@ func has_store(component_type_id: int) -> bool:
 	return _stores_by_type.has(component_type_id)
 
 
-## Выделяет новый id сущности из пула свободных. Возвращает -1, когда свободных
-## id не осталось (мир заполнен под завязку) — вызывающий код обязан это
-## проверять, а не считать, что создание всегда удаётся. Про рост мира до того,
-## как это случится, см. [EcsCapacityPolicySystem].
+## Allocates a new entity id from the free pool. Returns -1 when there are no
+## free ids left (the world is completely full) — the calling code must check
+## for this rather than assume creation always succeeds. See
+## [EcsCapacityPolicySystem] about growing the world before this happens.
 func create_entity() -> int:
 	if _free_count == 0:
 		return -1
@@ -172,15 +172,15 @@ func create_entity() -> int:
 	return entity
 
 
-## Выделяет до [param entity_count] сущностей за один проход, записывая их id в
-## [param out_entities], и возвращает, сколько реально создано (меньше
-## запрошенного, если у мира закончились свободные id).
+## Allocates up to [param entity_count] entities in one pass, writing their ids
+## into [param out_entities], and returns how many were actually created (less
+## than requested if the world ran out of free ids).
 ##
-## Это спавн-аналог [method flush_destroy_queue]: спавнер волны, всплеск частиц
-## или шаг деления клеток создают за кадр десятки и сотни сущностей, и заплатить
-## накладные расходы вызова один раз вместо N — чистый выигрыш.
-## [param out_entities] должен быть заранее рассчитан на запрос; он заполняется
-## на месте.
+## This is the spawn counterpart of [method flush_destroy_queue]: a wave spawner,
+## a particle burst or a cell-division step create dozens or hundreds of entities
+## per frame, and paying the call overhead once instead of N times is a clear
+## win. [param out_entities] must be sized for the request in advance; it is
+## filled in place.
 ##
 ## [codeblock]
 ## var spawned: int = world.create_entities(32, _spawn_buffer)
@@ -191,7 +191,7 @@ func create_entities(entity_count: int, out_entities: PackedInt32Array) -> int:
 		return 0
 	var available: int = mini(entity_count, _free_count)
 	if available > out_entities.size():
-		push_error("EcsWorld: выходной буфер create_entities() вмещает %d, а нужно %d"
+		push_error("EcsWorld: the create_entities() output buffer holds %d, but %d are needed"
 			% [out_entities.size(), available])
 		available = out_entities.size()
 	if available <= 0:
@@ -212,8 +212,8 @@ func create_entities(entity_count: int, out_entities: PackedInt32Array) -> int:
 	return available
 
 
-## Создаёт сущность и сразу возвращает handle, безопасный между кадрами.
-## Перед индексированием хранилищ разрешите его через entity_from_handle().
+## Creates an entity and immediately returns a handle that is safe across frames.
+## Resolve it through entity_from_handle() before indexing stores.
 func create_entity_handle() -> int:
 	if _world_tag == 0:
 		return INVALID_HANDLE
@@ -221,8 +221,8 @@ func create_entity_handle() -> int:
 	return make_handle(entity) if entity >= 0 else INVALID_HANDLE
 
 
-## Упаковывает сырой id сущности и текущее поколение в положительное 64-битное
-## число. Возвращает INVALID_HANDLE, если сущность не жива.
+## Packs the raw entity id and the current generation into a positive 64-bit
+## number. Returns INVALID_HANDLE if the entity is not alive.
 func make_handle(entity: int) -> int:
 	if _world_tag == 0 or not is_alive(entity):
 		return INVALID_HANDLE
@@ -231,7 +231,8 @@ func make_handle(entity: int) -> int:
 		| entity
 
 
-## Разрешает handle в текущий сырой id, либо INVALID_ENTITY, если он протух.
+## Resolves a handle to the current raw id, or INVALID_ENTITY if it has gone
+## stale.
 func entity_from_handle(handle: int) -> int:
 	if handle <= INVALID_HANDLE or _world_tag == 0:
 		return INVALID_ENTITY
@@ -251,8 +252,8 @@ func is_handle_alive(handle: int) -> bool:
 	return entity_from_handle(handle) != INVALID_ENTITY
 
 
-## Безопасная точка входа для уничтожения целей и владельцев, хранимых между
-## кадрами. Возвращает false для неверного или уже протухшего handle.
+## A safe entry point for destroying targets and owners kept across frames.
+## Returns false for an invalid or already stale handle.
 func queue_destroy_handle(handle: int) -> bool:
 	var entity: int = entity_from_handle(handle)
 	if entity == INVALID_ENTITY:
@@ -281,13 +282,12 @@ func is_alive(entity: int) -> bool:
 	return _alive[entity] == 1
 
 
-## Помечает [param entity] на уничтожение. НЕ удаляет её — реальное удаление
-## делает [method flush_destroy_queue] в конце кадра.
+## Marks [param entity] for destruction. Does NOT remove it — the real removal is
+## done by [method flush_destroy_queue] at the end of the frame.
 ##
-## Идемпотентно: если сущность уже в очереди (или уже мертва), повторный вызов
-## ничего не делает. Это защищает от двойной постановки в очередь, когда
-## несколько систем в одном кадре независимо решают уничтожить одну и ту же
-## сущность.
+## Idempotent: if the entity is already in the queue (or already dead), a
+## repeated call does nothing. This guards against double-queuing when several
+## systems in one frame independently decide to destroy the same entity.
 func queue_destroy(entity: int) -> bool:
 	if entity < 0 or entity >= capacity:
 		return false
@@ -300,8 +300,8 @@ func queue_destroy(entity: int) -> bool:
 	return true
 
 
-## Помечает на уничтожение [param entity_count] сущностей из [param entities] и
-## возвращает, сколько из них попало в очередь впервые.
+## Marks [param entity_count] entities from [param entities] for destruction and
+## returns how many of them entered the queue for the first time.
 func queue_destroy_many(entities: PackedInt32Array, entity_count: int) -> int:
 	if entity_count <= 0:
 		return 0
@@ -334,28 +334,28 @@ func is_pending_destroy(entity: int) -> bool:
 	return entity >= 0 and entity < capacity and _destroy_flag[entity] == 1
 
 
-## Выполняет РЕАЛЬНОЕ уничтожение всех сущностей, накопленных в очереди: каждая
-## отцепляется от каждого зарегистрированного хранилища, помечается мёртвой и
-## возвращается в пул свободных. Возвращает число уничтоженных сущностей.
+## Performs the REAL destruction of every entity accumulated in the queue: each
+## one is detached from every registered store, marked dead and returned to the
+## free pool. Returns the number of destroyed entities.
 ##
-## Это structural sync point — вызывайте его только между фазами, когда ни одна
-## система не держит плотный слот. Повторный пустой flush безопасен.
+## This is a structural sync point — call it only between phases, when no system
+## is holding a dense slot. A repeated empty flush is safe.
 ##
-## [b]Цикл идёт по хранилищам, а не по сущностям.[/b] Вместо того чтобы опрашивать
-## каждое хранилище о каждой сущности (чтение свойства плюс вызов метода на
-## пару), каждому хранилищу один раз отдаётся весь список жертв, и оно крутит
-## собственный плотный цикл (см. [method EcsComponentStore.detach_many]). При
-## дюжине хранилищ у большинства сущностей нет большинства компонентов, поэтому
-## всё решает путь «такого компонента нет» — а он падает с вызова метода до
-## одного чтения локального массива.
+## [b]The loop iterates by store, not by entity.[/b] Instead of asking every
+## store about every entity (a property read plus a method call per pair), each
+## store is handed the whole list of victims once and runs its own dense loop
+## (see [method EcsComponentStore.detach_many]). With a dozen stores, most
+## entities do not have most components, so the "no such component" path decides
+## everything — and that path drops from a method call to a single local array
+## read.
 func flush_destroy_queue() -> int:
 	var queued: int = _destroy_count
 	_destroy_count = 0
 	if queued == 0:
 		return 0
 
-	# Разрешаем ключи из очереди и уплотняем выживших в начало того же массива,
-	# который дальше и служит списком жертв, отдаваемым хранилищам.
+	# Resolve the queue keys and compact the survivors into the front of the same
+	# array, which then serves as the list of victims handed to the stores.
 	var queue: PackedInt32Array = _destroy_queue
 	var stamps: PackedInt32Array = _destroy_generation
 	var flags: PackedByteArray = _destroy_flag
@@ -366,9 +366,9 @@ func flush_destroy_queue() -> int:
 		var entity: int = queue[i]
 		if entity < 0 or entity >= capacity or alive[entity] == 0 \
 				or stamps[i] == 0 or generations[entity] != stamps[i]:
-			# Защитная ветка: внутри одного цикла flush помеченная сущность всегда
-			# разрешается, поскольку поколения меняются только здесь. Флаг всё равно
-			# сбрасываем, чтобы протухший не пережил цикл.
+			# Defensive branch: within a single flush loop a marked entity always
+			# resolves, since generations only change here. The flag is cleared
+			# anyway so a stale one does not survive the loop.
 			if entity >= 0 and entity < capacity:
 				flags[entity] = 0
 			continue
@@ -377,16 +377,16 @@ func flush_destroy_queue() -> int:
 	if reaped == 0:
 		return 0
 
-	# Флаги жертв остаются выставленными на всё время этого цикла, чтобы каждое
-	# хранилище могло выбрать более дешёвый из двух обходов.
+	# The victims' flags stay set for the whole duration of this loop so that
+	# each store can pick the cheaper of two traversals.
 	#
-	# Обход собственного плотного массива (detach_flagged) стоит O(count), но
-	# заранее знает, какие элементы обречены, поэтому переносит минимум — ноль,
-	# когда хранилище вычищается целиком. Обход списка жертв (detach_many) стоит
-	# O(reaped), но переносит по одному разу на удаление. Хранилище выигрывает,
-	# пока оно ненамного больше списка жертв; примерно после двукратного размера
-	# лишние итерации перевешивают сэкономленные переносы, потому что при таком
-	# размере удаляется лишь малая доля хранилища.
+	# Iterating its own dense array (detach_flagged) costs O(count), but it knows
+	# in advance which elements are doomed, so it relocates the minimum — zero
+	# when the store is wiped entirely. Iterating the list of victims
+	# (detach_many) costs O(reaped) but relocates once per removal. A store wins
+	# while it is not much larger than the list of victims; past roughly twice
+	# the size the extra iterations outweigh the saved relocations, because at
+	# that size only a small fraction of the store is removed.
 	var flagged_limit: int = reaped * 2
 	for store in _stores:
 		var held: int = store.count
@@ -436,13 +436,13 @@ func get_pending_destroy_count() -> int:
 	return _destroy_count
 
 
-## Доля мира, занятая живыми сущностями, в [0, 1]. На ней работает
-## [EcsCapacityPolicySystem], и её удобно показывать на отладочном HUD.
+## The fraction of the world occupied by live entities, in [0, 1].
+## [EcsCapacityPolicySystem] runs on it, and it is handy to show on a debug HUD.
 func get_load_factor() -> float:
 	return float(_live_count) / float(capacity)
 
 
-## Число зарегистрированных хранилищ компонентов.
+## The number of registered component stores.
 func get_store_count() -> int:
 	return _stores.size()
 
@@ -455,32 +455,32 @@ func is_schema_locked() -> bool:
 	return _schema_locked
 
 
-## Очищает журнал структурных изменений у каждого зарегистрированного хранилища,
-## у которого он включён. Вызывайте один раз за кадр, после того как отработали
-## системы, потребляющие журналы.
+## Clears the structural change log of every registered store that has it
+## enabled. Call it once per frame, after the systems that consume the logs have
+## run.
 func clear_change_logs() -> void:
 	for store in _stores:
 		if store.track_changes:
 			store.clear_change_log()
 
 
-## Явно увеличивает все буферы мира и хранилищ. Существующие сырые id, handle и
-## плотные слоты остаются действительными. Операция аллоцирует; вызывайте её
-## только на безопасной границе загрузки, никогда — во время обхода систем.
+## Explicitly grows all the world's and stores' buffers. Existing raw ids,
+## handles and dense slots stay valid. The operation allocates; call it only at a
+## safe loading boundary, never during a system iteration.
 ##
-## Возвращает false, ничего не тронув, если хотя бы одно зарегистрированное
-## хранилище не умеет расти: хранилище поддерживает рост ровно тогда, когда оно
-## определяет `_grow_dense()`. [EcsPackedStore] и [EcsTagStore] умеют всегда.
+## Returns false, touching nothing, if at least one registered store cannot grow:
+## a store supports growth exactly when it defines `_grow_dense()`.
+## [EcsPackedStore] and [EcsTagStore] always can.
 func reserve_capacity(entity_capacity: int) -> bool:
 	if entity_capacity <= capacity:
 		return false
 	if entity_capacity > _HANDLE_ENTITY_MASK + 1:
-		push_error("EcsWorld: ёмкость выходит за диапазон generational handle")
+		push_error("EcsWorld: capacity is outside the generational-handle range")
 		return false
 	for store in _stores:
 		if store.get_capacity() != capacity \
 				or not store._can_grow_capacity_from_world(entity_capacity, self):
-			push_error("EcsWorld: хранилище типа %d не может безопасно вырасти до %d — ему нужен хук _grow_dense()"
+			push_error("EcsWorld: the store of type %d cannot safely grow to %d — it needs a _grow_dense() hook"
 				% [store.type_id, entity_capacity])
 			return false
 	var previous_capacity: int = capacity
@@ -505,19 +505,20 @@ func reserve_capacity(entity_capacity: int) -> bool:
 	return true
 
 
-## Полностью сбрасывает мир — все сущности «умирают», все хранилища очищаются —
-## без единой аллокации: массивы просто перезаполняются. Пригодно для
-## перезапуска уровня без пересоздания мира и потери преаллоцированной памяти.
+## Fully resets the world — every entity "dies", every store is cleared — with no
+## allocation at all: the arrays are simply refilled. Suitable for restarting a
+## level without recreating the world and losing the pre-allocated memory.
 ##
-## Регистрации хранилищ сохраняются, поэтому [method register_store] повторно
-## вызывать нельзя (и не нужно).
+## Store registrations are kept, so [method register_store] must not (and need
+## not) be called again.
 func reset() -> void:
 	_destroy_count = 0
 	_free_count = 0
 	_retired_count = 0
-	# Свободный список заполняется по убыванию, поэтому id выдаются по возрастанию
-	# (стек LIFO: записанный последним выдаётся первым). Слот с исчерпанным
-	# поколением остаётся retired навсегда, чтобы старый handle не мог ожить.
+	# The free list is filled in descending order, so ids are handed out in
+	# ascending order (a LIFO stack: the last one written is the first one out).
+	# A slot with an exhausted generation stays retired forever, so an old handle
+	# cannot come back to life.
 	for i in capacity:
 		var entity: int = capacity - 1 - i
 		if _retired[entity] == 1:
@@ -544,9 +545,9 @@ func reset() -> void:
 	structural_version += 1
 
 
-## Дорогая проверка распределителя, очереди уничтожения и всех sparse-множеств
-## для этапа разработки. Вызывайте из тестов, редакторской команды или редкой
-## отладочной системы; никогда — из продакшн-кадра.
+## An expensive check of the allocator, the destroy queue and every sparse set,
+## for the development stage. Call it from tests, an editor command or a rare
+## debug system; never from a production frame.
 func validate_integrity(report_errors: bool = true) -> bool:
 	var valid := true
 	if _alive.size() != capacity or _free_ids.size() != capacity \
@@ -554,17 +555,17 @@ func validate_integrity(report_errors: bool = true) -> bool:
 			or _destroy_flag.size() != capacity \
 			or _generations.size() != capacity or _retired.size() != capacity:
 		if report_errors:
-			push_error("EcsWorld: размеры буферов жизненного цикла не совпадают с ёмкостью")
+			push_error("EcsWorld: the lifecycle buffer sizes do not match the capacity")
 		return false
 	if _live_count < 0 or _free_count < 0 or _retired_count < 0 \
 			or _live_count + _free_count + _retired_count != capacity:
 		valid = false
 		if report_errors:
-			push_error("EcsWorld: счётчики live/free/retired не сходятся с ёмкостью")
+			push_error("EcsWorld: the live/free/retired counters do not add up to the capacity")
 	if _destroy_count < 0 or _destroy_count > capacity:
 		valid = false
 		if report_errors:
-			push_error("EcsWorld: destroy_count вне ёмкости")
+			push_error("EcsWorld: destroy_count is outside the capacity")
 
 	var free_seen := PackedByteArray()
 	free_seen.resize(capacity)
@@ -573,12 +574,12 @@ func validate_integrity(report_errors: bool = true) -> bool:
 		if entity < 0 or entity >= capacity:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: список свободных содержит неверную сущность %d" % entity)
+				push_error("EcsWorld: the free list contains an invalid entity %d" % entity)
 			continue
 		if free_seen[entity] == 1 or _alive[entity] == 1:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: дубликат или живая сущность %d в списке свободных" % entity)
+				push_error("EcsWorld: a duplicate or live entity %d is in the free list" % entity)
 		free_seen[entity] = 1
 
 	var destroy_seen := PackedByteArray()
@@ -588,12 +589,12 @@ func validate_integrity(report_errors: bool = true) -> bool:
 		if entity < 0 or entity >= capacity:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: очередь уничтожения содержит неверную сущность %d" % entity)
+				push_error("EcsWorld: the destroy queue contains an invalid entity %d" % entity)
 			continue
 		if destroy_seen[entity] == 1 or _alive[entity] == 0 or _destroy_flag[entity] == 0:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: неконсистентная сущность %d в очереди уничтожения" % entity)
+				push_error("EcsWorld: an inconsistent entity %d is in the destroy queue" % entity)
 		destroy_seen[entity] = 1
 
 	var counted_alive: int = 0
@@ -601,29 +602,29 @@ func validate_integrity(report_errors: bool = true) -> bool:
 		if _generations[entity] <= 0:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: нулевое поколение у сущности %d" % entity)
+				push_error("EcsWorld: entity %d has a zero generation" % entity)
 		if _alive[entity] == 1:
 			if _retired[entity] == 1:
 				valid = false
 				if report_errors:
-					push_error("EcsWorld: выведенная из обращения сущность %d помечена живой" % entity)
+					push_error("EcsWorld: retired entity %d is marked alive" % entity)
 			counted_alive += 1
 		elif free_seen[entity] == 0 and _retired[entity] == 0:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: мёртвая сущность %d отсутствует в списке свободных" % entity)
+				push_error("EcsWorld: dead entity %d is missing from the free list" % entity)
 		if _destroy_flag[entity] != destroy_seen[entity]:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: флаг уничтожения не совпадает с очередью для сущности %d" % entity)
+				push_error("EcsWorld: the destroy flag does not match the queue for entity %d" % entity)
 		if _retired[entity] == 1 and free_seen[entity] == 1:
 			valid = false
 			if report_errors:
-				push_error("EcsWorld: выведенная из обращения сущность %d присутствует в списке свободных" % entity)
+				push_error("EcsWorld: retired entity %d is present in the free list" % entity)
 	if counted_alive != _live_count:
 		valid = false
 		if report_errors:
-			push_error("EcsWorld: флаги alive не совпадают с live_count")
+			push_error("EcsWorld: the alive flags do not match live_count")
 
 	for store in _stores:
 		if store.get_capacity() != capacity or not store.validate_integrity(_alive, report_errors):
